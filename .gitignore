@@ -1,0 +1,28 @@
+.DS_Store
+.idea/
+.vscode/
+__pycache__/
+*.pyc
+*.pyo
+
+# Local runtime state, generated output, and temporary work are never source.
+/.tmp/
+/tmp/
+/output/
+/Echo_Codex接入包_*/
+/RELATIONSHIP_HANDOFF_*.md
+
+# Personalized operator documents stay local; public docs refer to them by path.
+/HERMES_狗头军师用户手册.md
+/HERMES_飞书接管故障修复复盘.md
+
+# Runtime credentials belong in the host's protected Hermes directory.
+.env
+.env.*
+!.env.example
+
+# The raw research workspace is intentionally not part of the distributable skill.
+/恋爱知识库/
+
+# Local relationship records contain private conversation context.
+/.local/

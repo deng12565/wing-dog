@@ -1,0 +1,19 @@
+name: goutoujunshi
+version: 1.3.0
+description: "Fail-closed Feishu adviser with auto-loaded guidance, isolated relationships, and shared owner memory backed by MySQL."
+author: local
+kind: standalone
+requires_env:
+  - GOUTOUJUNSHI_DB_PASSWORD
+  - GOUTOUJUNSHI_OWNER_ID
+  - GOUTOUJUNSHI_TOKEN_SECRET
+provides_tools:
+  - relationship_commit_turn
+  - relationship_search_events
+  - user_memory_remember
+  - user_memory_correct
+  - user_memory_forget
+hooks:
+  - pre_gateway_dispatch
+  - post_llm_call
+  - on_session_end
