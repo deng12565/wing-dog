@@ -1,6 +1,6 @@
 # 关键流程
 
-本文先记录产品建议流程，再记录 Hermes 私有运行时的持久化与运维链路。前八节适用于 Codex Skill；后三节只适用于已部署并正确配置的 Hermes/飞书/MySQL 环境。
+本文先记录产品建议流程，再记录 Hermes 私有运行时的持久化与运维链路。前八节适用于 Codex Skill；后续章节只适用于已部署并正确配置的 Hermes 私有环境。
 
 ## 1. 男性找女友通用路径
 
@@ -108,8 +108,8 @@
 **成功结果**：本轮确认事实、建议草稿和必要快照以一次事务提交，并异步刷新投影
 
 1. 工具校验 relationship token 与当前 session、chat、relationship binding 一致，并从服务端保存的 message source 取得去重依据。
-2. 一轮最多写入 12 个事件，最多一个 `current_inbound`；只有当前 `received` 才能确认同人物同渠道的上一条草稿。
-3. 事务内依次写入事件、精确 `draft` 正文和快照变化。无内容、未知事件类型、非法渠道或不安全确认会整体失败。
+2. 一轮最多写入 12 个事件，最多一个 `current_inbound`；保留显式确认兼容路径。普通 owner 消息到达时，hook 已先按同人物同渠道规则默认追加上一草稿的 `sent`；命令不触发，明确“没发/未发送/还没发/没采用/改了”则追加 correction。
+3. 事务内依次写入事件、精确 `draft` 正文和快照变化。每个非 draft 事件同时生成 MySQL 检索文档；合法 `search_enrichment` 写为 `enriched`，缺失或非法时写为 `raw_only` 并排队，不阻断权威事件。无内容、未知事件类型、非法渠道或不安全确认会整体失败。
 4. `dedupe_key` 和稳定的 external message id 使重复工具调用返回原事件而不重复追加。
 5. 只有事务产生实际变化时才排入一个待处理 `export_jobs`。
 6. exporter 从 MySQL 重新读取完整人物/事件数据，原子替换 `.local/relationships/<slug>.md` 并设置只读。
@@ -125,7 +125,17 @@
 3. `goutoujunshi_cli.py reconcile-config` 从 MySQL 活动绑定重建 profile routes，同时将免 `@` allowlist 规则镜像到 Feishu adapter 的 `extra.group_rules`。
 4. supervisor 确保 Hermes Gateway 进程存在并检查 Feishu 连接状态。
 5. 每轮重试关系投影、清理过期临时媒体；每天创建一次 MySQL dump 并清理超过 30 天的本地备份。
-6. 单轮异常写入本地 supervisor 日志并等待下一轮，不代表服务已经恢复。
+6. supervisor 不处理历史补强任务，避免日常启动隐式外发关系正文。单轮异常写入本地日志并等待下一轮，不代表服务已经恢复。
 7. `Control-Goutoujunshi.ps1 -Action Stop` 停止计划任务，正常停止 Gateway 和 MySQL，再终止整个 Ubuntu WSL；其他在该发行版运行的程序也会停止。
 
 本节只描述脚本定义。当前计划任务、容器、Gateway 和飞书连接是否健康，需要独立的运行态检查。
+
+## 12. MySQL 增强检索与历史补强
+
+1. `relationship_search_events` 先解析一个当前活动 binding。`channel` 省略表示该人物全部渠道；显式渠道才过滤。`include_drafts=true` 必须指定渠道，draft 只走原文精确/子串分支。
+2. 搜索并行形成三支最多 40 条候选：原文精确/子串、原文 ngram FULLTEXT、增强文本 ngram FULLTEXT。固定 `RRF k=60`，权重依次为 `1.5 / 1.0 / 1.25`。
+3. 融合 ID 必须按当前人物、可选渠道和 draft 合同回 `relationship_events` hydrate；补强文本仅参与排序，不作为事实返回。命中旧事件时递归加载 correction，并把 correction 放在旧记录前。
+4. 默认返回 8 条，单条权威正文最多 1200 字符，总正文最多 6000 字符。`mysql_enriched` 表示至少有增强覆盖；覆盖不完整返回 `mysql_raw` 和 `incomplete_enrichment`。零结果不能写成从未发生。
+5. schema v5 会为全部现有非 draft 事件创建 `raw_only` 文档和 pending 任务，并删除两个旧 MySQL 向量派生表。实际迁移必须单独授权。
+6. 获准后，operator 显式运行 `enrichment-backfill` 统一 prompt 版本，再反复运行 `enrichment-work --limit 8`，最后用 `enrichment-status` 核对；达到 5 次上限的失败项需显式 `enrichment-retry-failed`。每批输入不超过 12000 字符，当前远程主模型只返回结构化增强，不保存原始响应/正文日志。
+7. 新 prompt 版本可把已完成事件重新排队；失败或中断通过 attempts/status/started_at 续跑。回填覆盖活动和归档人物的 `received/sent/background/analysis/correction`，不包含 draft。

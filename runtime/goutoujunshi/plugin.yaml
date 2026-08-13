@@ -1,6 +1,6 @@
 name: goutoujunshi
-version: 1.3.0
-description: "Fail-closed Feishu adviser with auto-loaded guidance, isolated relationships, and shared owner memory backed by MySQL."
+version: 1.5.0
+description: "Fail-closed Feishu adviser with isolated MySQL relationship memory and enriched MySQL retrieval."
 author: local
 kind: standalone
 requires_env:

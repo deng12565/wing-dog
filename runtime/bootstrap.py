@@ -21,6 +21,19 @@ PROVIDER = "openai-api"
 TARGET_MODEL = "gpt-5.6-terra"
 TARGET_REASONING = "high"
 CODEX_ROUTE = "codex-gpt"
+LEGACY_VECTOR_ENV_KEYS = {
+    "GOUTOUJUNSHI_SEMANTIC_SEARCH_ENABLED",
+    "GOUTOUJUNSHI_MILVUS_MANAGED",
+    "GOUTOUJUNSHI_MILVUS_URL",
+    "GOUTOUJUNSHI_MILVUS_TOKEN",
+    "GOUTOUJUNSHI_OLLAMA_URL",
+    "GOUTOUJUNSHI_OLLAMA_KEEP_ALIVE",
+    "GOUTOUJUNSHI_SEMANTIC_TIMEOUT_SECONDS",
+    "GOUTOUJUNSHI_RRF_K",
+    "GOUTOUJUNSHI_KEYWORD_WEIGHT",
+    "GOUTOUJUNSHI_SEMANTIC_WEIGHT",
+    "GOUTOUJUNSHI_EMBEDDING_MODEL",
+}
 CODEX_USER_AGENT = "codex_cli_rs/0.0.0"
 USER_TOOLSET = "goutoujunshi-user"
 RELATIONSHIP_TOOLSET = "goutoujunshi"
@@ -419,7 +432,7 @@ def command_prepare_secrets(args: argparse.Namespace) -> None:
         "GOUTOUJUNSHI_MODEL": TARGET_MODEL,
         "GOUTOUJUNSHI_REASONING": TARGET_REASONING,
     }
-    update_dotenv(env_path, updates)
+    update_dotenv(env_path, updates, removals=LEGACY_VECTOR_ENV_KEYS)
     emit(
         {
             "ok": True,
@@ -706,7 +719,11 @@ def command_configure_profile(args: argparse.Namespace) -> None:
         "GOUTOUJUNSHI_MODEL",
         "GOUTOUJUNSHI_REASONING",
     }
-    update_dotenv(profile_home / ".env", {key: global_values[key] for key in allowed_keys if key in global_values})
+    update_dotenv(
+        profile_home / ".env",
+        {key: global_values[key] for key in allowed_keys if key in global_values},
+        removals=LEGACY_VECTOR_ENV_KEYS,
+    )
     emit({"ok": True, "profile": "goutoujunshi", "toolsets": profile_toolsets, "memory": False})
 
 

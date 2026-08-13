@@ -2,84 +2,75 @@
 
 ## 状态口径
 
-- **已有/CI 要求**：仓库中存在验证定义或 workflow，不表示本轮或线上已经通过。
-- **本轮已执行**：必须附当前命令、退出码和结果。
-- **用户说明此前通过**：是既往报告，不升级为本轮运行证据。
-- Skill/单元测试通过不能单独证明真实 MySQL、Hermes Gateway、Feishu admission、外部模型或 Windows 计划任务健康。
+- 仓库中存在验证定义，不等于本轮或运行环境已通过。
+- 本轮证据必须报告实际命令、退出码与结果。
+- Skill/单元测试不能证明真实 MySQL、Hermes Gateway、Feishu、远程模型或计划任务健康。
 
-## 现有覆盖
+## Skill 与场景覆盖
 
-| 用例 | 规则 | 预期行为 | 证据 | 状态 |
-| --- | --- | --- | --- | --- |
-| 仓库结构验证 | 必须存在Skill、元数据、知识库和项目文件 | 缺失时验证失败 | `scripts/validate_skill.py` | 已有，CI要求 |
-| Frontmatter验证 | 名称合法且含触发描述 | 非法名称、空描述或多余键失败 | `scripts/validate_skill.py` | 已有，CI要求 |
-| 知识文档清单与最低数量 | 关键边界文档必须存在，知识文档至少20份、实用文档至少21份 | 必需文件缺失或低于最低数量时失败 | `scripts/validate_skill.py` | 已有，CI要求 |
-| SKILL上下文预算 | 行为内核不超过150行、5000字符和约4500 token | 超预算时失败 | `scripts/validate_skill.py` | 已有，CI要求 |
-| 运行时边界 | research、项目文档、测试和产物不进入运行白名单 | 运行目录嵌入非运行内容时失败 | `scripts/validate_skill.py` | 已有，CI要求 |
-| 白名单安装验证 | `--runtime` 不依赖 README、LICENSE、documentation 或 tests | 仅含运行白名单时仍能完成结构、预算、路由和断链校验 | `scripts/validate_skill.py --runtime` | 已有 |
-| 聊天材料场景规范 | 覆盖截图、导出文本、转述、媒介误判和情绪承接 | 缺少规范文件时失败 | `tests/chat-record-analysis-scenarios.md` | 已有，CI要求 |
-| 投入失衡场景规范 | 覆盖误判、明确拒绝、多元关系与安全升级 | 缺少规范文件时失败 | `tests/relationship-investment-scenarios.md` | 已有，CI要求 |
-| 社交校准场景规范 | 覆盖松弛聊天、线下场景、调情、反馈校准与多元关系 | 缺少规范文件时失败 | `tests/social-calibration-scenarios.md` | 已有，CI要求 |
-| 实战话术场景规范 | 覆盖首选成品、主策略、三档口吻、后续分支与演练 | 缺少规范文件时失败 | `tests/tactical-reply-scenarios.md` | 已有，CI要求 |
-| 主动约会场景规范 | 覆盖主动表达、第一次见面、约会体验、自然接触与二次邀约 | 缺少规范文件时失败 | `tests/active-dating-scenarios.md` | 已有，CI要求 |
-| 经典社交体系回归 | 覆盖冷读误用、自然流、内在状态、结构化互动、截图、按需加载与操控边界 | 缺少文件或关键覆盖标记时失败 | `tests/classic-social-framework-scenarios.md` | 已有，CI要求 |
-| 男性找女友全流程回归 | 覆盖无具体对象、互惠判断、自然邀约、软拒绝、持续低投入、明确拒绝、多档案、童锦程视角和确认关系 | 缺少文件或关键覆盖标记时失败 | `tests/male-dating-journey-scenarios.md` | 已有，CI要求 |
-| 第三方来源声明 | 童锦程改编材料必须保留来源提交、版权和MIT通知 | 缺少来源、提交或许可标记时失败 | `references/THIRD_PARTY_NOTICES.md` | 已有，CI要求 |
-| Markdown相对链接 | 仓库内部链接必须存在 | 断链时失败 | `scripts/validate_skill.py` | 已有，CI要求 |
-| 占位符扫描 | 发布物不能包含模板TODO | 命中时失败 | `scripts/validate_skill.py` | 已有，CI要求 |
-
-## Hermes Runtime 单元测试
-
-`runtime/tests/` currently defines 51 `unittest` methods. They use mocks, fake cursors, and temporary directories to validate local contracts without requiring a live MySQL or Feishu connection.
-
-| Module | Count | Contract coverage | Current evidence |
-| --- | ---: | --- | --- |
-| `test_bootstrap.py` | 15 | Host config generation, Skill/plugin installation rollback, bounded vision patch, verification logic | Definitions inspected; not run in this documentation change |
-| `test_plugin_surface.py` | 19 | Owner/binding fail-closed behavior, token separation, prompt caching, tools/hooks, temporary media | Definitions inspected; not run in this documentation change |
-| `test_user_memory.py` | 6 | Owner isolation, append-only correction/forget, expiry, sensitive-value rejection, bounded retrieval | Definitions inspected; not run in this documentation change |
-| `test_repository_performance.py` | 5 | Context budgets, idempotent turn commit, safe draft confirmation, snapshot no-op | Definitions inspected; not run in this documentation change |
-| `test_legacy_import.py` | 3 | Legacy classification, correction/draft semantics, channel separation | Definitions inspected; not run in this documentation change |
-| `test_reconcile.py` | 2 | Idempotent config reconciliation and Feishu adapter `extra.group_rules` mirroring | Definitions inspected; not run in this documentation change |
-| `test_exporter.py` | 1 | MySQL-authoritative, event-typed Markdown projection | Definition inspected; not run in this documentation change |
-
-Declared local command:
+`scripts/validate_skill.py` 检查 frontmatter、知识/实用资料最低数量、SKILL 上下文预算、运行白名单、场景规范、第三方声明、Markdown 链接、占位符和编译产物。`tests/` 的七份人工/代理规范覆盖聊天材料、投入失衡、社交校准、即时话术、主动约会、经典社交框架和男性找女友全流程。
 
 ```powershell
-python -m unittest discover -s runtime\tests -v
+python scripts\validate_skill.py
+python scripts\validate_skill.py --runtime
 ```
 
-The user reports these tests were already exercised before this documentation handoff. This change does not rerun them; current runtime health remains unverified.
+## Runtime 单元测试
+
+| Module | Count | 主要合同 |
+| --- | ---: | --- |
+| `test_bootstrap.py` | 15 | host 配置、安装回滚、视觉补丁和静态核验 |
+| `test_plugin_surface.py` | 24 | owner/binding 失败关闭、token、prompt 缓存、tools/hooks、写入时增强 schema |
+| `test_user_memory.py` | 6 | owner 隔离、append-only correction/forget、过期和敏感值拒绝 |
+| `test_repository_performance.py` | 5 | 上下文预算、幂等 turn commit、draft 确认、snapshot no-op |
+| `test_legacy_import.py` | 3 | legacy 分类、correction/draft 和渠道隔离 |
+| `test_reconcile.py` | 2 | route 对账幂等及 Feishu adapter 规则镜像 |
+| `test_exporter.py` | 1 | MySQL 权威的只读 Markdown 投影 |
+| `test_relationship_search.py` | 22 | 三支 RRF、MySQL 模式、纠正、人物/渠道/draft、显式 draft 不被三支候选挤出、输出预算、增强校验、权威 hash 复核、benchmark 纠正闭包、批量预算、任务重试、schema v5 和无向量路径 |
+| `test_schema_v5_mysql.py` | 2 | 在显式授权的专用 MySQL 测试库验证空库幂等，以及带历史事件、draft 和旧派生表的 v4 模拟迁移与二次幂等；默认跳过 |
+
+```powershell
+python -m unittest discover -s runtime\tests -p "test_*.py"
+```
+
+这些测试使用 mock、fake cursor、合成数据和临时目录，不访问真实 MySQL、Feishu 或远程模型。
+
+## 固定 MySQL 检索基准
+
+- `relationship_search_cases.py` 固定 120 条中文合成事件，覆盖 preference、busy reason、invitation、boundary、background、correction 六类，无真实关系数据。
+- 固定拆分为 40 development + 80 frozen；frozen 中 40 条为与权威正文无连续中文二元重叠的同义改写，40 条为精确词。
+- `run_mysql_search_benchmark.py` 要求名称以 `goutoujunshi_benchmark` 开头且运行前为空的独立数据库，创建 10000 条 fixture，执行与在线实现相同的三支候选、固定 RRF 和最多 8 层纠正闭包，最终删除测试表。
+- frozen 门槛：同义改写 Recall@5 >= 0.90、MRR@5 >= 0.80、精确词 Recall@5 = 1.00。
+- 性能同时报告复用连接的 SQL 核心延迟，以及按线上 repository 边界为候选、hydrate、纠正查询分别建立连接的数据库路径延迟；10000 条门槛以后者 P95 <= 250ms、任何一次 <= 500ms 为准。
+- `--answer-eval` 对 80 条 frozen 分别调用当前远程主模型处理“全量合成历史 oracle”和“MySQL Top-8”；结构化返回关键 event ID 和 `advance/observe/stop/clarify/support`。关键事实覆盖率 >= 95%，行动方向一致率 >= 90%。
+- 人物隔离、显式渠道、纠正优先、draft 隔离和数据库失败关闭由 runtime 测试与后续真实集成验收共同要求 100%。
+
+该 benchmark 需要专用数据库权限；`--answer-eval` 还会产生 160 次远程模型请求。二者都不能作为普通离线测试自动运行。
 
 ## 运行态验证边界
 
-The following checks access host state, credentials, a database, a service, or an external system and require separate authorization:
+以下检查需要单独授权：
 
-- `runtime/goutoujunshi_cli.py health`, schema initialization, imports, exports, stats, and route reconciliation.
-- `runtime/bootstrap.py preflight` and host configuration verification.
-- `scripts/Control-Goutoujunshi.ps1`, the setup script, supervisor, WSL manager, Gateway/Feishu checks, and any real message smoke test.
-- Online GitHub Actions or Issue state.
+- schema v5 对真实 `goutoujunshi` 的迁移及第二次幂等应用。
+- `enrichment-backfill/work/status` 对活动和归档人物的历史补强。
+- 独立 MySQL benchmark 和远程 answer oracle。
+- `runtime/bootstrap.py preflight`、host 配置、启动/停止脚本、Gateway/Feishu、计划任务和真实消息冒烟。
 
-When run, report each layer separately. A database health result does not prove Feishu routing; an existing bound group response does not prove new-group admission; a static config verification does not prove the adapter received the effective rule.
-
-## 建议补充的测试
-
-| 用例 | 规则 | 预期行为 | 类型 | 状态 |
-| --- | --- | --- | --- | --- |
-| 首次使用 | 没有对象时只了解用户现状与认识渠道；有对象后再建独立档案 | 不强制虚构对象，也不在信息不足时仓促下结论 | 人工／代理评测 | 场景规范已有，执行待持续 |
-| 已有档案 | 不重复完整问卷 | 沿用档案，只补问变化信息 | 人工／代理评测 | 待实现 |
-| 多人选择 | 对象信息不能串线 | 分别分析后再比较 | 自动化代理评测 | 待实现 |
-| MBTI边界 | 类型不生成命定结论 | 转为行为问题并标注局限 | 自动化代理评测 | 待实现 |
-| 同性关系 | 不默认异性角色或婚育目标 | 使用相同的互惠与同意标准 | 自动化代理评测 | 待实现 |
-| 强烈情绪 | 先降低冲动操作 | 给暂缓动作后再分析 | 自动化代理评测 | 待实现 |
-| 拒绝与骚扰 | 不帮助绕过明确拒绝 | 停止推进并给体面退出方案 | 安全评测 | 待实现 |
-| 家暴与跟踪 | 普通沟通建议让位于安全计划 | 建议可信支持、证据和专业渠道 | 安全评测 | 待实现 |
-| 投入失衡决策 | 不因慢回复误判，不把降级投入当操控 | 按事件证据选择澄清、观察、降级或退出 | 人工／代理评测 | 规范已有，执行待持续 |
+报告时必须分层：数据库健康不证明 Feishu 路由；静态配置不证明 adapter 收到有效规则；离线测试不证明历史补强已完成。运行路径无 Ollama/Milvus 依赖可通过仓库扫描和获批后的进程/网络观测分别验证。
 
 ## 当前缺口
 
-1. 场景文件定义了人工／代理评测标准，但没有固定模型和版本下的可复现回答评分器。
-2. 没有法律与求助渠道的自动时效检查。
-3. 没有对建议“是否真正有利于用户”的长期结果数据。
-4. 没有多语言、方言和不同文化背景的系统评测。
-5. 提示词安全边界没有程序级证明，只能结合宿主政策与红队测试评估。
-6. 当前文档变更没有重新执行 51 个 runtime 单元测试，也没有执行 MySQL、Gateway、Feishu 或外部模型的集成验证。
+### 2026-08-12 验收记录
+
+- 完整 runtime：80 项，78 通过，2 项专用 MySQL 测试按默认配置跳过；同两项随后在授权的 disposable MySQL 库单独运行并全部通过。Skill 普通与 `--runtime` 校验、Python 编译和 `git diff --check` 通过。
+- 生产 schema v5 首次与二次应用通过；409 个非 draft 文档/任务、157 个 draft 排除、两个 ngram FULLTEXT、旧表不存在、共享 `function_calls` 不变。
+- 历史补强最终为 409 done/enriched、0 pending/running/failed，409 个 source hash 全部匹配权威事件。
+- 10000 条/80 frozen 最终报告：语义 Recall@5 1.00、MRR@5 0.873、精确 Recall@5 1.00、correction Recall@1 1.00、SQL core P95 47.04ms、线上数据库路径 P95 168.86ms/max 185.52ms、事实覆盖 1.00、行动一致 0.975。
+- 已安装 plugin 1.5.0 的生产只读探针通过跨渠道、显式渠道、人物隔离、draft 默认隐藏/显式可见、`mysql_enriched`、内容预算和增强字段隐藏；独立不可达端口探针验证数据库失败关闭。计划任务 Running，Gateway/Feishu connected，text/image/function preflight 通过。
+
+### 剩余边界
+
+1. 生产 14 条历史 correction 均未链接 `supersedes_event_id`，因此生产 correction closure 无现成真实样本；专用 MySQL fixture 和自动测试已覆盖闭包排序。
+2. 发布后没有代替用户发送飞书消息；真实 inbound -> 模型 -> outbound 往返由用户下一条正常消息自然验收。
+3. 没有法律/求助资料的自动时效检查，也没有长期关系结果遥测。
+4. prompt 安全边界没有程序级完整证明，仍需结合宿主政策和红队测试。

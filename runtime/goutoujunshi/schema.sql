@@ -112,6 +112,74 @@ CREATE TABLE IF NOT EXISTS export_jobs (
         REFERENCES relationship_profiles(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+CREATE TABLE IF NOT EXISTS relationship_event_search_documents (
+    event_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+    relationship_id BIGINT UNSIGNED NOT NULL,
+    source_text LONGTEXT NOT NULL,
+    source_sha256 CHAR(64) NOT NULL,
+    enrichment_json JSON NOT NULL,
+    enrichment_text LONGTEXT NOT NULL,
+    enrichment_source ENUM('none', 'model') NOT NULL DEFAULT 'none',
+    enrichment_version VARCHAR(64) NOT NULL DEFAULT '',
+    status ENUM('raw_only', 'enriched') NOT NULL DEFAULT 'raw_only',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    KEY ix_search_document_relationship (relationship_id, status, event_id),
+    FULLTEXT KEY ft_search_document_source (source_text) WITH PARSER ngram,
+    FULLTEXT KEY ft_search_document_enrichment (enrichment_text) WITH PARSER ngram,
+    CONSTRAINT fk_search_document_event FOREIGN KEY (event_id)
+        REFERENCES relationship_events(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_search_document_relationship FOREIGN KEY (relationship_id)
+        REFERENCES relationship_profiles(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS relationship_event_enrichment_jobs (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    event_id BIGINT UNSIGNED NOT NULL,
+    relationship_id BIGINT UNSIGNED NOT NULL,
+    source_sha256 CHAR(64) NOT NULL,
+    prompt_version VARCHAR(64) NOT NULL,
+    status ENUM('pending', 'running', 'done', 'failed') NOT NULL DEFAULT 'pending',
+    attempts INT UNSIGNED NOT NULL DEFAULT 0,
+    last_error_code VARCHAR(64) NULL,
+    last_error VARCHAR(1000) NULL,
+    requested_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    started_at DATETIME(6) NULL,
+    completed_at DATETIME(6) NULL,
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    UNIQUE KEY uq_enrichment_job_event (event_id),
+    KEY ix_enrichment_job_claim (status, attempts, prompt_version, id),
+    KEY ix_enrichment_job_relationship (relationship_id, status, event_id),
+    CONSTRAINT fk_enrichment_job_event FOREIGN KEY (event_id)
+        REFERENCES relationship_events(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_enrichment_job_relationship FOREIGN KEY (relationship_id)
+        REFERENCES relationship_profiles(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+INSERT IGNORE INTO relationship_event_search_documents(
+    event_id,relationship_id,source_text,source_sha256,enrichment_json,
+    enrichment_text,enrichment_source,enrichment_version,status
+)
+SELECT id,relationship_id,content,SHA2(content,256),JSON_OBJECT(),'',
+    'none','','raw_only'
+FROM relationship_events
+WHERE event_type <> 'draft';
+
+INSERT IGNORE INTO relationship_event_enrichment_jobs(
+    event_id,relationship_id,source_sha256,prompt_version,status,completed_at
+)
+SELECT e.id,e.relationship_id,SHA2(e.content,256),
+    IF(d.status='enriched' AND d.enrichment_version <> '',d.enrichment_version,'mysql-enrichment-v1'),
+    IF(d.status='enriched','done','pending'),
+    IF(d.status='enriched',CURRENT_TIMESTAMP(6),NULL)
+FROM relationship_events e
+JOIN relationship_event_search_documents d ON d.event_id=e.id
+WHERE e.event_type <> 'draft';
+
+DROP TABLE IF EXISTS relationship_event_index_jobs;
+
+DROP TABLE IF EXISTS relationship_search_indexes;
+
 CREATE TABLE IF NOT EXISTS control_requests (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     request_kind ENUM('reconcile_routes', 'restart_gateway') NOT NULL,
@@ -160,3 +228,9 @@ VALUES (2, 'enforce utf8mb4 channel default');
 
 INSERT IGNORE INTO schema_migrations(version, description)
 VALUES (3, 'add append-only cross-group user memory');
+
+INSERT IGNORE INTO schema_migrations(version, description)
+VALUES (4, 'reserved legacy relationship search migration');
+
+INSERT IGNORE INTO schema_migrations(version, description)
+VALUES (5, 'replace vector search with enriched MySQL fulltext documents');

@@ -77,10 +77,16 @@ class BootstrapConfigTests(unittest.TestCase):
             env_path.write_text(
                 "GOUTOUJUNSHI_MODEL=gpt-5.6-terra\n"
                 "GOUTOUJUNSHI_OPENAI_BASE_URL=https://example.invalid/v1\n"
-                "GOUTOUJUNSHI_REASONING=high\n",
+                "GOUTOUJUNSHI_REASONING=high\n"
+                "GOUTOUJUNSHI_OLLAMA_URL=http://127.0.0.1:11434\n",
                 encoding="utf-8",
             )
             profile_home = root / "profile"
+            profile_home.mkdir()
+            (profile_home / ".env").write_text(
+                "GOUTOUJUNSHI_MILVUS_MANAGED=true\nCUSTOM_PROFILE_VALUE=kept\n",
+                encoding="utf-8",
+            )
 
             bootstrap.command_configure_profile(
                 SimpleNamespace(profile_home=str(profile_home), global_env=str(env_path))
@@ -97,6 +103,10 @@ class BootstrapConfigTests(unittest.TestCase):
             self.assertIn("terminal", config["agent"]["disabled_toolsets"])
             self.assertEqual(config["compression"]["min_tail_user_messages"], 3)
             self.assertTrue(config["compression"]["abort_on_summary_failure"])
+            profile_values = bootstrap.load_dotenv(profile_home / ".env")
+            self.assertNotIn("GOUTOUJUNSHI_OLLAMA_URL", profile_values)
+            self.assertNotIn("GOUTOUJUNSHI_MILVUS_MANAGED", profile_values)
+            self.assertEqual(profile_values["CUSTOM_PROFILE_VALUE"], "kept")
 
     def test_skill_package_exactly_mirrors_runtime_allowlist(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -313,7 +323,12 @@ class Runner:
             config = root / "config.toml"
             sessions = root / "sessions.json"
             env = root / ".env"
-            env.write_text("DEEPSEEK_API_KEY=optional-provider-secret\n", encoding="utf-8")
+            env.write_text(
+                "DEEPSEEK_API_KEY=optional-provider-secret\n"
+                "GOUTOUJUNSHI_MILVUS_URL=http://127.0.0.1:19530\n"
+                "GOUTOUJUNSHI_SEMANTIC_SEARCH_ENABLED=true\n",
+                encoding="utf-8",
+            )
             auth.write_text(json.dumps({"OPENAI_API_KEY": "test-secret"}), encoding="utf-8")
             config.write_text(
                 '\n'.join(
@@ -348,6 +363,8 @@ class Runner:
             self.assertEqual(values["GOUTOUJUNSHI_MODEL"], "gpt-5.6-terra")
             self.assertEqual(values["GOUTOUJUNSHI_REASONING"], "high")
             self.assertEqual(values["DEEPSEEK_API_KEY"], "optional-provider-secret")
+            self.assertNotIn("GOUTOUJUNSHI_MILVUS_URL", values)
+            self.assertNotIn("GOUTOUJUNSHI_SEMANTIC_SEARCH_ENABLED", values)
 
     def test_model_config_has_no_fallback(self) -> None:
         config = {

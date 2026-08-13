@@ -13,6 +13,13 @@ from typing import Any
 import yaml
 
 from goutoujunshi.database import apply_schema, transaction
+from goutoujunshi.enrichment import ENRICHMENT_PROMPT_VERSION
+from goutoujunshi.enrichment_jobs import (
+    enrichment_job_status,
+    process_enrichment_jobs,
+    queue_enrichment_backfill,
+    retry_failed_enrichment_jobs,
+)
 from goutoujunshi.exporter import export_relationship, process_export_jobs
 from goutoujunshi.legacy_import import import_evidence_file, import_legacy_file, sha256_bytes
 from goutoujunshi.repository import (
@@ -27,6 +34,8 @@ from goutoujunshi.repository import (
     list_user_memory,
     pending_control_requests,
     remember_user_memory,
+    resolve_draft,
+    unresolved_drafts,
 )
 
 
@@ -46,7 +55,7 @@ def command_health(_: argparse.Namespace) -> None:
 
 def command_init(_: argparse.Namespace) -> None:
     apply_schema()
-    emit({"ok": True, "schema_version": 3})
+    emit({"ok": True, "schema_version": 5})
 
 
 def _owner() -> str:
@@ -248,6 +257,51 @@ def command_stats(args: argparse.Namespace) -> None:
     )
 
 
+def command_enrichment_backfill(args: argparse.Namespace) -> None:
+    emit({"ok": True, "prompt_version": args.prompt_version, **queue_enrichment_backfill(args.prompt_version)})
+
+
+def command_enrichment_work(args: argparse.Namespace) -> None:
+    emit(
+        {
+            "ok": True,
+            "prompt_version": args.prompt_version,
+            **process_enrichment_jobs(args.limit, prompt_version=args.prompt_version),
+        }
+    )
+
+
+def command_enrichment_status(args: argparse.Namespace) -> None:
+    emit({"ok": True, "prompt_version": args.prompt_version, **enrichment_job_status(args.prompt_version)})
+
+
+def command_enrichment_retry_failed(args: argparse.Namespace) -> None:
+    emit(
+        {
+            "ok": True,
+            "prompt_version": args.prompt_version,
+            "queued": retry_failed_enrichment_jobs(args.prompt_version),
+        }
+    )
+
+
+def command_draft_review_list(args: argparse.Namespace) -> None:
+    emit({"ok": True, "drafts": unresolved_drafts(args.relationship_id)})
+
+
+def command_draft_review_resolve(args: argparse.Namespace) -> None:
+    emit(
+        {
+            "ok": True,
+            **resolve_draft(
+                args.draft_id,
+                resolution=args.resolution,
+                source_ref=args.source_ref,
+            ),
+        }
+    )
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Goutoujunshi relationship store maintenance")
     sub = result.add_subparsers(dest="command", required=True)
@@ -277,6 +331,27 @@ def parser() -> argparse.ArgumentParser:
     stats = sub.add_parser("stats")
     stats.add_argument("relationship_id", type=int)
     stats.set_defaults(func=command_stats)
+    enrichment_backfill = sub.add_parser("enrichment-backfill")
+    enrichment_backfill.add_argument("--prompt-version", default=ENRICHMENT_PROMPT_VERSION)
+    enrichment_backfill.set_defaults(func=command_enrichment_backfill)
+    enrichment_work = sub.add_parser("enrichment-work")
+    enrichment_work.add_argument("--limit", type=int, choices=range(1, 9), default=8)
+    enrichment_work.add_argument("--prompt-version", default=ENRICHMENT_PROMPT_VERSION)
+    enrichment_work.set_defaults(func=command_enrichment_work)
+    enrichment_status = sub.add_parser("enrichment-status")
+    enrichment_status.add_argument("--prompt-version", default=ENRICHMENT_PROMPT_VERSION)
+    enrichment_status.set_defaults(func=command_enrichment_status)
+    enrichment_retry = sub.add_parser("enrichment-retry-failed")
+    enrichment_retry.add_argument("--prompt-version", default=ENRICHMENT_PROMPT_VERSION)
+    enrichment_retry.set_defaults(func=command_enrichment_retry_failed)
+    drafts = sub.add_parser("draft-review-list")
+    drafts.add_argument("--relationship-id", type=int)
+    drafts.set_defaults(func=command_draft_review_list)
+    resolve = sub.add_parser("draft-review-resolve")
+    resolve.add_argument("draft_id", type=int)
+    resolve.add_argument("--resolution", choices=("sent", "not-sent"), required=True)
+    resolve.add_argument("--source-ref", required=True)
+    resolve.set_defaults(func=command_draft_review_resolve)
     sub.add_parser("user-memory-list").set_defaults(func=command_user_memory_list)
     remember = sub.add_parser("user-memory-remember")
     remember.add_argument("content")

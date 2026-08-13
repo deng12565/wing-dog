@@ -2,81 +2,84 @@
 
 ## 产品概览
 
-狗头军师在同一仓库中维护两个运行面：可独立分发的 Codex Skill，以及面向受控本机环境的 Hermes/飞书/MySQL 私有运行时。前者提供行为与知识，后者提供消息接入、人物绑定、持久化、只读投影和运维自动化。仓库没有前端应用或公开 Web API。
+仓库维护两个独立运行面：可分发的 Codex Skill 提供行为与按需知识；Hermes/飞书/MySQL 私有运行时提供 owner 校验、人物绑定、持久化、检索、只读投影和本机运维。仓库没有前端或公开 Web API。
 
 ## 组件
 
 | 运行面 | 组件 | 路径 | 职责 |
 | --- | --- | --- | --- |
-| Codex Skill | 行为内核 | `SKILL.md` | 定义触发、建档、分析、输出与安全边界 |
-| Codex Skill | 界面与知识 | `agents/`、`references/` | 提供展示元数据与按需加载的知识/策略 |
-| Codex Skill | 结构验证 | `scripts/validate_skill.py`、`tests/` | 检查发布结构并维护人工/代理场景规范 |
-| Hermes runtime | 插件入口 | `runtime/goutoujunshi/__init__.py` | 注册工具与 hooks，执行飞书 owner/绑定检查并注入上下文 |
-| Hermes runtime | 数据层 | `database.py`、`repository.py`、`schema.sql` | 事务、人物/渠道隔离、事件、快照和个人记忆 |
-| Hermes runtime | 投影与维护 | `exporter.py`、`goutoujunshi_cli.py` | 生成只读 Markdown，处理导入、导出和路由对账 |
-| 本机运维 | 安装与监督 | `runtime/bootstrap.py`、`scripts/*.ps1`、`scripts/wsl/*.sh` | 安装/配置 Hermes，管理 WSL MySQL、Gateway、备份和计划任务 |
-| 项目文档 | 长期知识入口 | `README.md`、`AGENTS.md`、`documentation/` | 面向用户、开发者和后续代理维护当前事实 |
+| Codex Skill | 行为与知识 | `SKILL.md`、`agents/`、`references/` | 定义分析流程、安全边界和按需读取的关系知识 |
+| Codex Skill | 验证 | `scripts/validate_skill.py`、`tests/` | 检查发布结构、预算、链接和场景规范 |
+| Hermes runtime | 插件入口 | `runtime/goutoujunshi/__init__.py` | 注册 hooks/tools，校验 owner/绑定并生成关系 `channel_prompt` |
+| Hermes runtime | 权威数据 | `database.py`、`repository.py`、`schema.sql` | schema v5、事务、人物/渠道隔离、事件、快照、个人记忆和任务队列 |
+| Hermes runtime | MySQL 检索 | `search.py`、`enrichment.py` | 三分支 MySQL 候选、固定 RRF、纠正闭包和有界权威正文输出 |
+| Hermes runtime | 显式补强 | `enrichment_jobs.py`、`goutoujunshi_cli.py` | 远程主模型分批补强、状态、重试和断点续跑；不由 supervisor 自动调用 |
+| Hermes runtime | 投影 | `exporter.py` | 从 MySQL 生成只读 Markdown 审阅投影 |
+| 本机运维 | 安装与监督 | `runtime/bootstrap.py`、`scripts/*.ps1`、`scripts/wsl/*.sh` | 配置 Hermes，管理 MySQL、Gateway、路由、媒体和备份 |
 
 ## 运行拓扑
 
 ```text
-Codex request
-  -> SKILL.md
-  -> 1-3 relevant references
-  -> advice text (no persistence by the Skill itself)
+Codex request -> SKILL.md -> 1-3 relevant references -> advice (Skill itself does not persist)
 
 Feishu owner message
-  -> Hermes Feishu Adapter
-  -> pre_gateway_dispatch
-  -> owner + group binding + profile route checks
-  -> Skill + owner memory + one relationship context
-  -> model and registered tools
-  -> MySQL transaction
-  -> Feishu reply
-  -> export_jobs -> .local/relationships/*.md (read-only projection)
+  -> Hermes adapter -> pre_gateway_dispatch
+  -> owner + binding + route checks
+  -> bounded prompt -> remote main model + registered tools
+  -> relationship_commit_turn -> one MySQL transaction
+  -> Feishu reply -> export_jobs -> read-only Markdown projection
+
+Historical recall
+  -> one current MySQL binding
+  -> exact/substr source candidates (max 40, weight 1.5)
+  -> source ngram candidates (max 40, weight 1.0)
+  -> enrichment ngram candidates (max 40, weight 1.25)
+  -> RRF k=60 -> MySQL authority hydrate -> correction closure
+  -> default Top-8 authoritative event bodies
 ```
 
-`runtime/goutoujunshi/plugin.yaml` declares the plugin tools and hooks. `pre_gateway_dispatch` accepts only the configured owner, separates unbound general groups from bound relationship groups, and fails closed when a managed group is archived, its route is not synchronized, or the data layer raises an error. Relationship tools receive session-bound HMAC claims; owner memory tools and relationship tools use separate token kinds.
+在线关系检索没有 Ollama、Milvus、本地 embedding 或常驻检索 worker。共享 Milvus 服务或卷属于仓库外资源，本次移除代码不会启动、停止、清空或删除它们。
 
-## 数据与一致性
+## 最终提示词组成
 
-- WSL MySQL 8 database `goutoujunshi` is the only authoritative relationship store.
-- `relationship_profiles` owns person-scoped snapshots; `chat_bindings` binds one Feishu chat to one relationship; `source_channels` keeps WeChat, Douyin, Moments, offline, and other channels separate.
-- `relationship_events` preserves `received`, `sent`, `draft`, `background`, `analysis`, and `correction`; corrections and user-memory changes append history instead of overwriting it.
-- `relationship_commit_turn` validates the current server message source and writes events, an optional exact draft, and snapshot changes in one transaction. A changed transaction queues at most one pending export for the relationship.
-- `.local/relationships/*.md` is a generated review surface. `exporter.py` writes via a same-directory temporary file, replaces atomically, and marks the projection read-only.
-- `.local/archive/imports/` and its SHA256 files are immutable migration evidence. Neither location belongs in Git.
+Hermes 发送给主模型的请求按以下层次组装；具体 SDK 序列化细节由宿主负责：
 
-## 部署与运维
+1. 基础 `system` 前缀：Hermes 身份、工具与平台规则、Skill 索引、记忆和会话元数据。
+2. 临时 `system` 尾部：飞书平台上下文、插件生成的 `channel_prompt`，以及可能存在的通道配置提示。
+3. 新会话第一条 `user`：宿主自动加载的完整 `SKILL.md` 脚手架，随后才是用户原始消息；后续轮次作为会话历史保留。
+4. 关系 `channel_prompt`：跨群 owner 本人记忆、当前人物绑定规则/签名令牌、关系快照和有界事件工作集。
+5. 有界工作集顺序：快照后的 correction 最多 5 条、当前渠道未决 draft 最多 1 条、当前渠道真实 `received/sent` 最多 12 条、背景最多 3 条；关系 JSON 序列化目标上限 3000 字符。
+6. 旧事件默认不全量注入。模型调用 `relationship_search_events` 后，Top-8 检索结果以 `tool` 消息进入下一次模型请求；单条正文最多 1200 字符，总正文最多 6000 字符。
+7. 参考资料不全量拼接，模型按 `SKILL.md` 的路由按需读取 1-3 份。
 
-`Setup-And-Start-Goutoujunshi.ps1` is a side-effectful installation path: it can install a Python dependency, prepare protected environment values, call an external model preflight, start/apply the WSL MySQL schema, import legacy data, install/patch Hermes packages, update host configuration, and register a login scheduled task. It is not a normal development check.
+`channel_prompt` 在同一 session 内保持字节稳定缓存；写入、搜索工具结果和后续历史仍由 Hermes 作为新的消息加入请求。检索增强文本从不作为事实或 tool 结果返回给主模型。
 
-The registered `Hermes-Goutoujunshi` task runs `Run-Goutoujunshi.ps1`. The supervisor ensures MySQL, reconciles routes, starts/checks the Gateway and Feishu adapter, retries projections, removes expired temporary media, and performs daily database backups. `Control-Goutoujunshi.ps1` provides explicit Start/Stop actions; Stop also terminates the Ubuntu WSL distribution after graceful Gateway and MySQL shutdown.
+## schema v5 与一致性
 
-These are repository implementation facts, not proof of current host state. Scheduled-task status, installed Hermes code, WSL Compose configuration, database contents, Feishu admission, and model availability require separate authorized runtime checks.
+- `relationship_events` 是唯一权威事件表，保存六类事件；correction 只追加，不改写历史。
+- `relationship_event_search_documents` 保存 event/person ID、权威原文副本/hash、增强 JSON、扁平检索文本、来源/版本/状态，并对原文与增强文本建立 `FULLTEXT ... WITH PARSER ngram`。
+- `relationship_event_enrichment_jobs` 保存每个非 draft 事件的 prompt 版本、状态、尝试次数和无正文错误信息。
+- 每个非 draft 事件在同一事务创建检索文档。增强缺失或非法时写入 `raw_only` 并排队，不阻断权威事件；合法增强写为 `enriched`。重复提交只补全缺失增强，空值不能覆盖已有结果。
+- draft 不创建增强文档，只能在显式渠道下经原文精确/子串分支检索。correction 正常增强，但搜索仍把纠正闭包放在旧事件前。
+- schema v5 先创建/回填新表，再按依赖顺序删除旧 `relationship_event_index_jobs` 和 `relationship_search_indexes`。迁移 SQL 可重复执行，但真实执行仍需授权。
+- `.local/relationships/*.md` 只是原子替换的只读投影；`.local/archive/imports/` 及 SHA256 是不可变迁移证据，二者都不属于 Git。
 
-## Skill 分发边界
+## 补强与运维
 
-The Skill runtime allowlist contains `SKILL.md`, `agents/`, `references/`, `scripts/`, and `assets/` when present. Project documentation and tests are not copied into a runtime-only Skill installation. Hermes deployment mirrors the allowlisted Skill into global and relationship-profile homes, while the Python plugin is installed separately.
+写入时主模型通过 `relationship_commit_turn.events[*].search_enrichment` 同步提供 `summary`、`concepts`、`aliases`、`entities`、`time_hints`。所有字段有固定长度/数量上限，只允许从该事件原文提取。
 
-Declared validation commands are:
+历史回填必须由 operator 显式依次执行 `enrichment-backfill`、`enrichment-work`、`enrichment-status`；达到尝试上限的失败项只能通过 `enrichment-retry-failed` 明确重置。每批最多 8 条、序列化输入不超过 12000 字符，覆盖活动和归档人物的全部非 draft 事件。worker 使用当前远程主模型和结构化工具输出，不保存原始模型响应，也不把聊天正文写入日志；prompt 版本升级会重新排队。supervisor 不自动处理该队列，避免未经授权外发历史内容。
 
-```powershell
-python scripts\validate_skill.py
-python scripts\validate_skill.py --runtime
-python -m unittest discover -s runtime\tests -v
-```
+登录 supervisor 只维护 MySQL、Gateway/Feishu、路由、投影、临时媒体和 MySQL 日备份。安装、启动、停止、schema 迁移、回填、benchmark 和远程模型预检均是有副作用操作。
 
-The validator checks repository/Skill structure and links. Runtime unit tests use mocks and temporary directories for plugin and data contracts. Neither category proves a live MySQL, Gateway, Feishu, or external model connection.
+## 信任边界
 
-## 信任边界与已知限制
-
-1. User content may contain sensitive relationship, health, financial, family, and sexual information.
-2. Skill instructions guide model behavior but are not program-level enforcement.
-3. Hermes owner, binding, route, token, toolset, and database checks provide runtime boundaries, subject to the correctness of the installed host and adapter.
-4. The model proposes replies; the system does not send messages to women through WeChat, Douyin, or other external channels.
-5. References may become stale, especially legal, platform, or crisis information.
-6. The repository has no telemetry backend beyond local runtime metrics/logging declared by the private deployment.
+1. MySQL 或人物 binding 不明确时失败关闭，不用通用猜测替代。
+2. 关系工具 token 绑定 chat/person/session；owner 记忆 token 与关系 token 不可互换。
+3. 搜索最终从当前 binding 回 MySQL hydrate，派生文档不能扩大人物或渠道权限。
+4. `mysql_raw` / `incomplete_enrichment` 表示补强覆盖不完整；零结果只能说“本次未检索到”，不能推断从未发生。
+5. 系统只向 owner 的飞书军师群提供建议，不向微信、抖音或任何女性自动代发。
+6. 静态仓库与离线测试不证明真实 MySQL、Hermes、Feishu、计划任务或远程模型当前健康。
 
 ## 相关文档
 
@@ -84,8 +87,5 @@ The validator checks repository/Skill structure and links. Runtime unit tests us
 - [关键流程](flows.md)
 - [权限边界](permissions.md)
 - [变量与秘密](variables.md)
-- [知识库治理](knowledge-base.md)
 - [自动化与代理边界](automation.md)
 - [测试地图](tests.md)
-- Local `.local/operator/HERMES_狗头军师用户手册.md`: personalized operator guide, intentionally outside the public Git baseline
-- Local `.local/operator/HERMES_飞书接管故障修复复盘.md`: host-specific incident review, intentionally outside the public Git baseline

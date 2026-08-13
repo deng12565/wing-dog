@@ -507,8 +507,9 @@ def confirm_latest_draft_with_status(
         JOIN source_channels c ON c.id=e.source_channel_id
         WHERE e.relationship_id=%s AND c.kind=%s AND e.event_type='draft'
           AND NOT EXISTS (
-            SELECT 1 FROM relationship_events sent
-            WHERE sent.supersedes_event_id=e.id AND sent.event_type='sent'
+            SELECT 1 FROM relationship_events resolution
+            WHERE resolution.supersedes_event_id=e.id
+              AND resolution.event_type IN ('sent','correction')
           )
         ORDER BY e.occurred_at DESC, e.id DESC LIMIT 1
         """,
@@ -671,6 +672,7 @@ def commit_turn(
                 channel=channel,
                 evidence_kind=str(item.get("evidence_kind") or "explicit_user_statement"),
                 external_message_id=f"{source_ref}:commit:event:{index}:{event_type}",
+                search_enrichment=item.get("search_enrichment"),
             )
             event_ids.append(event_id)
             changed = changed or event_created
@@ -823,8 +825,9 @@ def recent_context(
             FROM relationship_events e JOIN source_channels c ON c.id=e.source_channel_id
             WHERE e.relationship_id=%s AND c.kind=%s AND e.event_type='draft'
               AND NOT EXISTS (
-                  SELECT 1 FROM relationship_events sent
-                  WHERE sent.supersedes_event_id=e.id AND sent.event_type='sent'
+                  SELECT 1 FROM relationship_events resolution
+                  WHERE resolution.supersedes_event_id=e.id
+                    AND resolution.event_type IN ('sent','correction')
               )
             ORDER BY e.occurred_at DESC,e.id DESC LIMIT 1
             """,
@@ -877,23 +880,301 @@ def recent_context(
 
 
 def search_events(binding: dict[str, Any], query: str, channel: str | None, limit: int = 30) -> list[dict[str, Any]]:
-    clauses = ["e.relationship_id=%s", "e.content LIKE %s"]
-    params: list[Any] = [binding["id"], f"%{query}%"]
+    return exact_event_candidates(binding, [query], channel, include_drafts=False, limit=limit)
+
+
+def exact_event_candidates(
+    binding: dict[str, Any],
+    terms: list[str],
+    channel: str | None,
+    *,
+    include_drafts: bool,
+    limit: int = 40,
+) -> list[dict[str, Any]]:
+    clean_terms = list(dict.fromkeys(term.strip() for term in terms if term.strip()))[:16]
+    if not clean_terms:
+        return []
+    clauses = ["e.relationship_id=%s"]
+    params: list[Any] = [binding["id"]]
+    clauses.append("(" + " OR ".join(["LOCATE(%s,e.content) > 0"] * len(clean_terms)) + ")")
+    params.extend(clean_terms)
     if channel:
         clauses.append("c.kind=%s")
         params.append(channel)
-    params.append(min(max(limit, 1), 100))
+    if not include_drafts:
+        clauses.append("e.event_type <> 'draft'")
+    score_terms = clean_terms[1:] or clean_terms
+    term_score_sql = " + ".join(["(LOCATE(%s,e.content) > 0)"] * len(score_terms))
+    params.append(min(max(int(limit), 1), 40))
     with transaction() as cursor:
         cursor.execute(
             f"""
-            SELECT e.id,e.event_type,e.author_role,e.content,e.evidence_kind,e.occurred_at,c.kind AS channel
+            SELECT e.id,e.event_type,e.author_role,e.content,e.evidence_kind,e.occurred_at,
+                e.supersedes_event_id,c.kind AS channel
             FROM relationship_events e LEFT JOIN source_channels c ON c.id=e.source_channel_id
             WHERE {' AND '.join(clauses)}
-            ORDER BY e.occurred_at DESC,e.id DESC LIMIT %s
+            ORDER BY (LOCATE(%s,e.content) > 0) DESC,({term_score_sql}) DESC,
+                e.occurred_at DESC,e.id DESC LIMIT %s
+            """,
+            (*params[:-1], clean_terms[0], *score_terms, params[-1]),
+        )
+        return events_to_json(cursor.fetchall())
+
+
+def fulltext_event_candidates(
+    binding: dict[str, Any],
+    query: str,
+    channel: str | None,
+    *,
+    field: str,
+    limit: int = 40,
+) -> list[dict[str, Any]]:
+    columns = {
+        "source": "d.source_text",
+        "enrichment": "d.enrichment_text",
+    }
+    column = columns.get(field)
+    if not column:
+        raise ValueError("unsupported fulltext search field")
+    clauses = ["d.relationship_id=%s", "e.event_type <> 'draft'"]
+    params: list[Any] = [int(binding["id"])]
+    if field == "enrichment":
+        clauses.append("d.status='enriched'")
+    if channel:
+        clauses.append("c.kind=%s")
+        params.append(channel)
+    bounded_limit = min(max(int(limit), 1), 40)
+    with transaction() as cursor:
+        cursor.execute(
+            f"""
+            SELECT e.id,e.event_type,e.author_role,e.content,e.evidence_kind,e.occurred_at,
+                e.supersedes_event_id,c.kind AS channel,
+                MATCH({column}) AGAINST (%s IN NATURAL LANGUAGE MODE) AS fulltext_score
+            FROM relationship_event_search_documents d
+            JOIN relationship_events e ON e.id=d.event_id AND e.relationship_id=d.relationship_id
+            LEFT JOIN source_channels c ON c.id=e.source_channel_id
+            WHERE {' AND '.join(clauses)}
+              AND MATCH({column}) AGAINST (%s IN NATURAL LANGUAGE MODE)
+            ORDER BY fulltext_score DESC,e.occurred_at DESC,e.id DESC
+            LIMIT %s
+            """,
+            (query, *params, query, bounded_limit),
+        )
+        return events_to_json(cursor.fetchall())
+
+
+def enrichment_status(relationship_id: int) -> dict[str, int]:
+    with transaction() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                COUNT(*) AS authority_count,
+                COALESCE(SUM(d.event_id IS NOT NULL),0) AS document_count,
+                COALESCE(SUM(d.status='enriched'),0) AS enriched_count,
+                COALESCE(SUM(j.status='pending'),0) AS pending_count,
+                COALESCE(SUM(j.status='running'),0) AS running_count,
+                COALESCE(SUM(j.status='failed'),0) AS failed_count
+            FROM relationship_events e
+            LEFT JOIN relationship_event_search_documents d ON d.event_id=e.id
+            LEFT JOIN relationship_event_enrichment_jobs j ON j.event_id=e.id
+            WHERE e.relationship_id=%s AND e.event_type <> 'draft'
+            """,
+            (relationship_id,),
+        )
+        row = cursor.fetchone()
+    return {key: int(value or 0) for key, value in row.items()}
+
+
+def hydrate_search_events(
+    binding: dict[str, Any],
+    event_ids: list[int],
+    channel: str | None,
+    *,
+    include_drafts: bool,
+) -> dict[int, dict[str, Any]]:
+    unique_ids = list(dict.fromkeys(int(value) for value in event_ids if int(value) > 0))[:200]
+    if not unique_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(unique_ids))
+    clauses = ["e.relationship_id=%s", f"e.id IN ({placeholders})"]
+    params: list[Any] = [int(binding["id"]), *unique_ids]
+    if channel:
+        clauses.append("c.kind=%s")
+        params.append(channel)
+    if not include_drafts:
+        clauses.append("e.event_type <> 'draft'")
+    with transaction() as cursor:
+        cursor.execute(
+            f"""
+            SELECT e.id,e.event_type,e.author_role,e.content,e.evidence_kind,e.occurred_at,
+                e.supersedes_event_id,c.kind AS channel
+            FROM relationship_events e LEFT JOIN source_channels c ON c.id=e.source_channel_id
+            WHERE {' AND '.join(clauses)}
+            """,
+            tuple(params),
+        )
+        return {int(item["id"]): item for item in events_to_json(cursor.fetchall())}
+
+
+def corrections_for_events(
+    binding: dict[str, Any],
+    event_ids: list[int],
+    channel: str | None,
+) -> list[dict[str, Any]]:
+    unique_ids = list(dict.fromkeys(int(value) for value in event_ids if int(value) > 0))[:200]
+    if not unique_ids:
+        return []
+    placeholders = ",".join(["%s"] * len(unique_ids))
+    clauses = [
+        "e.relationship_id=%s",
+        "e.event_type='correction'",
+        f"e.supersedes_event_id IN ({placeholders})",
+    ]
+    params: list[Any] = [int(binding["id"]), *unique_ids]
+    if channel:
+        clauses.append("c.kind=%s")
+        params.append(channel)
+    with transaction() as cursor:
+        cursor.execute(
+            f"""
+            SELECT e.id,e.event_type,e.author_role,e.content,e.evidence_kind,e.occurred_at,
+                e.supersedes_event_id,c.kind AS channel
+            FROM relationship_events e LEFT JOIN source_channels c ON c.id=e.source_channel_id
+            WHERE {' AND '.join(clauses)}
+            ORDER BY e.occurred_at DESC,e.id DESC
             """,
             tuple(params),
         )
         return events_to_json(cursor.fetchall())
+
+
+def unresolved_drafts(relationship_id: int | None = None) -> list[dict[str, Any]]:
+    clauses = [
+        "e.event_type='draft'",
+        "NOT EXISTS (SELECT 1 FROM relationship_events resolution "
+        "WHERE resolution.supersedes_event_id=e.id "
+        "AND resolution.event_type IN ('sent','correction'))",
+    ]
+    params: list[Any] = []
+    if relationship_id is not None:
+        clauses.append("e.relationship_id=%s")
+        params.append(int(relationship_id))
+    with transaction() as cursor:
+        cursor.execute(
+            f"""
+            SELECT e.id,e.relationship_id,p.display_name,c.kind AS channel,e.content,e.occurred_at
+            FROM relationship_events e
+            JOIN relationship_profiles p ON p.id=e.relationship_id
+            JOIN source_channels c ON c.id=e.source_channel_id
+            WHERE {' AND '.join(clauses)}
+            ORDER BY e.relationship_id,e.occurred_at DESC,e.id DESC
+            """,
+            tuple(params),
+        )
+        return events_to_json(cursor.fetchall())
+
+
+def resolve_draft(draft_id: int, *, resolution: str, source_ref: str) -> dict[str, Any]:
+    if resolution not in {"sent", "not-sent"}:
+        raise ValueError("resolution must be sent or not-sent")
+    source_ref = source_ref.strip()
+    if not source_ref or len(source_ref) > 64 or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}", source_ref):
+        raise ValueError("invalid source_ref")
+    with transaction() as cursor:
+        cursor.execute(
+            """
+            SELECT e.id,e.relationship_id,e.content,c.kind AS channel
+            FROM relationship_events e JOIN source_channels c ON c.id=e.source_channel_id
+            WHERE e.id=%s AND e.event_type='draft'
+              AND NOT EXISTS (
+                  SELECT 1 FROM relationship_events x
+                  WHERE x.supersedes_event_id=e.id AND x.event_type IN ('sent','correction')
+              )
+            FOR UPDATE
+            """,
+            (int(draft_id),),
+        )
+        draft = cursor.fetchone()
+        if not draft:
+            raise LookupError("unresolved draft not found")
+        event_type = "sent" if resolution == "sent" else "correction"
+        content = str(draft["content"]) if resolution == "sent" else "用户确认该存量草稿实际未发送或未采用。"
+        event_id, created = append_event_with_status(
+            cursor,
+            relationship_id=int(draft["relationship_id"]),
+            event_type=event_type,
+            author_role="user",
+            content=content,
+            channel=str(draft["channel"]),
+            evidence_kind="explicit_user_draft_review",
+            external_message_id=f"{source_ref}:draft:{draft_id}:{resolution}",
+            supersedes_event_id=int(draft["id"]),
+            metadata={"controlled_draft_review": True},
+        )
+        if created:
+            queue_export(cursor, int(draft["relationship_id"]))
+    return {"draft_id": int(draft_id), "resolution": resolution, "event_id": event_id, "changed": created}
+
+
+def apply_next_message_draft_rule(
+    binding: dict[str, Any],
+    *,
+    channel: str,
+    source_ref: str,
+    denies_sending: bool,
+) -> dict[str, Any]:
+    with transaction() as cursor:
+        cursor.execute(
+            """
+            SELECT e.id,e.content FROM relationship_events e
+            JOIN source_channels c ON c.id=e.source_channel_id
+            WHERE e.relationship_id=%s AND c.kind=%s AND e.event_type='draft'
+              AND NOT EXISTS (
+                  SELECT 1 FROM relationship_events sent
+                  WHERE sent.supersedes_event_id=e.id AND sent.event_type='sent'
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM relationship_events correction
+                  WHERE correction.supersedes_event_id=e.id AND correction.event_type='correction'
+              )
+            ORDER BY e.occurred_at DESC,e.id DESC LIMIT 1
+            """,
+            (int(binding["id"]), channel),
+        )
+        draft = cursor.fetchone()
+        if not draft:
+            return {"action": "none", "draft_id": None, "changed": False}
+        if denies_sending:
+            event_id, created = append_event_with_status(
+                cursor,
+                relationship_id=int(binding["id"]),
+                event_type="correction",
+                author_role="user",
+                content="用户明确否定上一草稿按原文发送；可能未发送、未采用或已修改。",
+                channel=channel,
+                evidence_kind="explicit_user_correction",
+                external_message_id=f"{source_ref}:draft:not-sent",
+                supersedes_event_id=int(draft["id"]),
+                metadata={"confirmation_rule": "next_owner_message_same_channel", "source_text_stored": False},
+            )
+            if created:
+                queue_export(cursor, int(binding["id"]))
+            return {"action": "corrected_not_sent", "draft_id": int(draft["id"]), "event_id": event_id, "changed": created}
+        event_id, created = append_event_with_status(
+            cursor,
+            relationship_id=int(binding["id"]),
+            event_type="sent",
+            author_role="user",
+            content=str(draft["content"]),
+            channel=channel,
+            evidence_kind="inferred_from_next_owner_message_same_channel",
+            external_message_id=f"{source_ref}:draft:sent",
+            supersedes_event_id=int(draft["id"]),
+            metadata={"confirmation_rule": "next_owner_message_same_channel"},
+        )
+        if created:
+            queue_export(cursor, int(binding["id"]))
+        return {"action": "confirmed_sent", "draft_id": int(draft["id"]), "event_id": event_id, "changed": created}
 
 
 def events_to_json(events: list[dict[str, Any]]) -> list[dict[str, Any]]:

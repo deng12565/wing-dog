@@ -2,44 +2,45 @@
 
 ## 两个配置边界
 
-可分发 Codex Skill 不要求环境变量或 API key。Hermes 私有运行时需要由宿主保护的 `.env`、Hermes YAML 配置和 Codex provider 信息。真实值不得写入本仓库、示例、日志、文档或 Git 历史。
+可分发 Codex Skill 不要求环境变量或 API key。Hermes 私有运行时需要宿主保护的 `.env`、Hermes YAML 和 Codex provider 信息。真实值不得进入仓库、日志、示例或 Git 历史。
 
-`runtime/goutoujunshi/plugin.yaml` 声明插件启动所必需的三个变量：`GOUTOUJUNSHI_DB_PASSWORD`、`GOUTOUJUNSHI_OWNER_ID`、`GOUTOUJUNSHI_TOKEN_SECRET`。安装脚本还配置下列运行变量。
+`runtime/goutoujunshi/plugin.yaml` 只声明插件启动必须的 `GOUTOUJUNSHI_DB_PASSWORD`、`GOUTOUJUNSHI_OWNER_ID`、`GOUTOUJUNSHI_TOKEN_SECRET`。其余变量由安装脚本配置。
 
 ## Runtime 变量
 
-| Name | Purpose | Source/default | Required/absence impact |
+| Name | Purpose | Source/default | Absence impact |
 | --- | --- | --- | --- |
-| `OPENAI_API_KEY` | Hermes model provider authentication | Protected Hermes env or interactive installation input | Model preflight/chat unavailable |
-| `FEISHU_ALLOW_ALL_USERS` | Disable open admission | Setup writes `false` | Incorrect value may broaden admission |
-| `FEISHU_ALLOWED_USERS` | Feishu adapter owner allowlist | Resolved from one historical Feishu owner | Owner messages may be rejected or wrong user admitted |
-| `GOUTOUJUNSHI_OWNER_ID` | Plugin owner identity and data namespace | Same resolved owner | Plugin fails closed |
-| `GOUTOUJUNSHI_DB_HOST` | MySQL host | Setup/default `127.0.0.1` | Connection uses default or fails |
-| `GOUTOUJUNSHI_DB_PORT` | MySQL port | Setup/default `3306` | Connection uses default or fails |
-| `GOUTOUJUNSHI_DB_NAME` | Authoritative database name | Setup/default `goutoujunshi` | Wrong database selected |
-| `GOUTOUJUNSHI_DB_USER` | Least-privilege application user | Setup/default `goutoujunshi_app` | Database authentication fails |
-| `GOUTOUJUNSHI_DB_PASSWORD` | Application database password | Generated/preserved in protected Hermes env | Data layer refuses to connect |
-| `GOUTOUJUNSHI_TOKEN_SECRET` | HMAC key for session-bound tool claims | Generated/preserved; minimum 32 characters | Tool claims cannot be issued or verified |
-| `GOUTOUJUNSHI_EXPORT_ROOT` | Generated relationship projection root | Setup points to `.local/relationships` | Exporter falls back to cwd `.local/relationships` |
-| `GOUTOUJUNSHI_OPENAI_BASE_URL` | Responses-compatible provider base URL | Derived from Codex config | Preflight/configuration fails |
-| `GOUTOUJUNSHI_MODEL` | Configured chat/vision model | Installation target | Preflight/configuration fails |
-| `GOUTOUJUNSHI_REASONING` | Configured reasoning effort | Installation target | Preflight/configuration fails |
-| `HERMES_HOME` | Hermes config, state, cache and media registry root | Operator scripts set `%LOCALAPPDATA%\hermes` | Plugin media registry/CLI host resolution may differ |
-| `PYTHONPATH` | Installed Hermes Python package root | Operator scripts set the Hermes agent root | CLI imports may fail |
+| `OPENAI_API_KEY` | Hermes 主模型、显式历史补强和 oracle 鉴权 | 受保护 env 或交互安装 | 对应远程模型调用失败 |
+| `FEISHU_ALLOW_ALL_USERS` | 禁止开放接入 | setup 写 `false` | 错误配置可能扩大接入 |
+| `FEISHU_ALLOWED_USERS` | Feishu owner allowlist | 唯一历史 owner | owner 消息可能被拒绝 |
+| `GOUTOUJUNSHI_OWNER_ID` | owner 身份与数据命名空间 | 同一 owner | 插件失败关闭 |
+| `GOUTOUJUNSHI_DB_HOST` / `PORT` | 权威 MySQL 地址 | `127.0.0.1` / `3306` | 连接失败 |
+| `GOUTOUJUNSHI_DB_NAME` | 权威数据库名 | `goutoujunshi` | 选错数据库 |
+| `GOUTOUJUNSHI_DB_USER` / `PASSWORD` | 最小权限数据库凭据 | `goutoujunshi_app` / 受保护随机值 | 数据层拒绝连接 |
+| `GOUTOUJUNSHI_TOKEN_SECRET` | session-bound HMAC 签名 | 受保护随机值，至少 32 字符 | 工具 token 无法签发 |
+| `GOUTOUJUNSHI_EXPORT_ROOT` | 只读关系投影目录 | `.local/relationships` | exporter 使用 cwd 默认值 |
+| `GOUTOUJUNSHI_OPENAI_BASE_URL` | Responses-compatible 主模型地址 | 从 Codex provider 派生 | 聊天/补强/预检失败 |
+| `GOUTOUJUNSHI_MODEL` | 当前远程主模型 | 安装目标 | 聊天/补强失败 |
+| `GOUTOUJUNSHI_REASONING` | reasoning effort | 安装目标 | 配置预检失败 |
+| `HERMES_HOME` | Hermes config/state/cache 根目录 | operator 脚本设置 | 宿主定位可能不同 |
+| `PYTHONPATH` | Hermes Python 根目录 | operator 脚本设置 | CLI 导入失败 |
 
-The setup script reads `%USERPROFILE%\.codex\auth.json`, `%USERPROFILE%\.codex\config.toml`, the Hermes session index, and an existing protected Hermes `.env`; these files are host inputs, not repository assets. It writes secrets through a staged file under ignored `.local/`, then replaces and restricts the host Hermes `.env`.
+在线检索没有语义开关、Milvus/Ollama URL、embedding 模型或 RRF 环境变量。`RRF k=60` 和三支权重在实现中固定，避免部署配置漂移。
+
+## 独立 benchmark 变量
+
+`run_mysql_search_benchmark.py` 只接受数据库名以 `goutoujunshi_benchmark` 开头的独立库，拒绝连接权威库。它使用 `GOUTOUJUNSHI_BENCHMARK_DB_HOST/PORT/NAME/USER/PASSWORD`；启用 `--answer-eval` 时还使用上表的远程主模型变量。benchmark 会创建并最终删除自己的测试表，必须在专用库与单独授权下运行。
 
 ## 配置文件
 
-- `runtime/goutoujunshi/plugin.yaml`: versioned plugin interface, required variable names, tools and hooks; contains no values.
-- Hermes global/profile `config.yaml`: host-managed provider, toolset, route, compression and Feishu adapter settings; not stored in this repository.
-- `runtime/goutoujunshi/schema.sql`: versioned MySQL schema; contains no password.
-- `scripts/wsl/Manage-Goutoujunshi-MySql.sh`: assumes a WSL Docker container and Compose directory outside the authorized repository. Their current content is not proven by this checkout.
+- `runtime/goutoujunshi/plugin.yaml`: v1.5.0 插件接口、工具与 hooks，无秘密值。
+- Hermes global/profile `config.yaml`: host-managed provider、toolset、route、compression 与 Feishu adapter 配置，不在仓库中。
+- `runtime/goutoujunshi/schema.sql`: schema v5，新增两个 MySQL 检索/任务表和 ngram FULLTEXT，无密码。
+- `scripts/wsl/Manage-Goutoujunshi-MySql.sh`: 面向仓库外的 WSL Docker MySQL；调用具有副作用。
 
 ## Secret 处理与发布检查
 
-- Never print or copy actual `.env`, auth, token, password, cookie, private-key, session or personal identifier values into documentation or review output.
-- Keep `.local/`, `.env*` except a deliberate value-free `.env.example`, dumps, backups, logs, relationship handoffs, import packages and generated projections out of Git.
-- Examples use variable names or synthetic placeholders only.
-- Installation and preflight commands may read credentials and access external systems; require explicit authorization before execution.
-- Before release or commit, inspect the exact staged path list and scan staged text for secret-like assignments and private relationship artifacts.
+- 不回显 `.env`、auth、token、密码、cookie、私钥、session 或人物标识。
+- `.local/`、`.env*`、dump、backup、log、关系 handoff、import package 和投影不得进入 Git。
+- 安装、预检、schema、回填和 benchmark 可能读取凭据或访问外部系统，执行前需要明确授权。
+- commit 前检查准确 staged 路径，并扫描秘密赋值和私密关系材料。

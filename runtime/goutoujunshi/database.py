@@ -9,6 +9,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
+from .enrichment import (
+    ENRICHMENT_PROMPT_VERSION,
+    enrichment_json,
+    enrichment_text,
+    normalize_search_enrichment,
+)
+
 
 CHANNELS = ("微信", "抖音", "朋友圈", "线下", "其他")
 EVENT_TYPES = {"received", "sent", "draft", "background", "analysis", "correction"}
@@ -123,6 +130,7 @@ def append_event_with_status(
     external_message_id: str | None = None,
     supersedes_event_id: int | None = None,
     metadata: dict[str, Any] | None = None,
+    search_enrichment: dict[str, Any] | None = None,
 ) -> tuple[int, bool]:
     if event_type not in EVENT_TYPES:
         raise ValueError(f"unsupported event_type: {event_type}")
@@ -160,10 +168,120 @@ def append_event_with_status(
     )
     created = bool(cursor.rowcount)
     cursor.execute(
-        "SELECT id FROM relationship_events WHERE relationship_id=%s AND dedupe_key=%s",
+        "SELECT id,content,event_type FROM relationship_events WHERE relationship_id=%s AND dedupe_key=%s",
         (relationship_id, dedupe),
     )
-    return int(cursor.fetchone()["id"]), created
+    authority = cursor.fetchone()
+    event_id = int(authority["id"])
+    authority_content = str(authority["content"])
+    authority_event_type = str(authority["event_type"])
+    if authority_event_type != "draft":
+        upsert_event_search_document(
+            cursor,
+            event_id=event_id,
+            relationship_id=relationship_id,
+            source_text=authority_content,
+            search_enrichment=(
+                search_enrichment
+                if authority_content == clean_content and authority_event_type == event_type
+                else None
+            ),
+        )
+    return event_id, created
+
+
+def upsert_event_search_document(
+    cursor: Any,
+    *,
+    event_id: int,
+    relationship_id: int,
+    source_text: str,
+    search_enrichment: dict[str, Any] | None,
+    replace_enrichment: bool = False,
+    enrichment_version: str = ENRICHMENT_PROMPT_VERSION,
+) -> str:
+    source_sha256 = hashlib.sha256(source_text.encode("utf-8")).hexdigest()
+    normalized = normalize_search_enrichment(search_enrichment)
+    status = "enriched" if normalized else "raw_only"
+    serialized = enrichment_json(normalized) if normalized else "{}"
+    flattened = enrichment_text(normalized) if normalized else ""
+    cursor.execute(
+        """
+        INSERT INTO relationship_event_search_documents(
+            event_id,relationship_id,source_text,source_sha256,enrichment_json,
+            enrichment_text,enrichment_source,enrichment_version,status
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ON DUPLICATE KEY UPDATE
+            source_text=VALUES(source_text),
+            source_sha256=VALUES(source_sha256),
+            enrichment_json=IF((status='raw_only' OR %s) AND VALUES(status)='enriched',
+                VALUES(enrichment_json),enrichment_json),
+            enrichment_text=IF((status='raw_only' OR %s) AND VALUES(status)='enriched',
+                VALUES(enrichment_text),enrichment_text),
+            enrichment_source=IF((status='raw_only' OR %s) AND VALUES(status)='enriched',
+                VALUES(enrichment_source),enrichment_source),
+            enrichment_version=IF((status='raw_only' OR %s) AND VALUES(status)='enriched',
+                VALUES(enrichment_version),enrichment_version),
+            status=IF((status='raw_only' OR %s) AND VALUES(status)='enriched','enriched',status)
+        """,
+        (
+            event_id,
+            relationship_id,
+            source_text,
+            source_sha256,
+            serialized,
+            flattened,
+            "model" if normalized else "none",
+            enrichment_version if normalized else "",
+            status,
+            replace_enrichment,
+            replace_enrichment,
+            replace_enrichment,
+            replace_enrichment,
+            replace_enrichment,
+        ),
+    )
+    cursor.execute(
+        "SELECT status,enrichment_version FROM relationship_event_search_documents WHERE event_id=%s",
+        (event_id,),
+    )
+    effective_document = cursor.fetchone()
+    effective_status = str(effective_document["status"])
+    effective_version = str(effective_document.get("enrichment_version") or enrichment_version)
+    if effective_status == "enriched":
+        cursor.execute(
+            """
+            INSERT INTO relationship_event_enrichment_jobs(
+                event_id,relationship_id,source_sha256,prompt_version,status,completed_at
+            ) VALUES (%s,%s,%s,%s,'done',CURRENT_TIMESTAMP(6))
+            ON DUPLICATE KEY UPDATE
+                relationship_id=VALUES(relationship_id),
+                source_sha256=VALUES(source_sha256),
+                prompt_version=IF(status='running',prompt_version,VALUES(prompt_version)),
+                completed_at=IF(status='running',completed_at,VALUES(completed_at)),
+                started_at=IF(status='running',started_at,NULL),
+                last_error_code=IF(status='running',last_error_code,NULL),
+                last_error=IF(status='running',last_error,NULL),
+                status=IF(status='running',status,'done')
+            """,
+            (event_id, relationship_id, source_sha256, effective_version),
+        )
+    else:
+        cursor.execute(
+            """
+            INSERT INTO relationship_event_enrichment_jobs(
+                event_id,relationship_id,source_sha256,prompt_version,status
+            ) VALUES (%s,%s,%s,%s,'pending')
+            ON DUPLICATE KEY UPDATE
+                relationship_id=VALUES(relationship_id),
+                source_sha256=VALUES(source_sha256),
+                prompt_version=IF(status='running',prompt_version,VALUES(prompt_version)),
+                completed_at=IF(status='done',NULL,completed_at),
+                status=IF(status='done','pending',status)
+            """,
+            (event_id, relationship_id, source_sha256, effective_version),
+        )
+    return effective_status
 
 
 def append_event(
@@ -179,6 +297,7 @@ def append_event(
     external_message_id: str | None = None,
     supersedes_event_id: int | None = None,
     metadata: dict[str, Any] | None = None,
+    search_enrichment: dict[str, Any] | None = None,
 ) -> int:
     event_id, _ = append_event_with_status(
         cursor,
@@ -192,6 +311,7 @@ def append_event(
         external_message_id=external_message_id,
         supersedes_event_id=supersedes_event_id,
         metadata=metadata,
+        search_enrichment=search_enrichment,
     )
     return event_id
 

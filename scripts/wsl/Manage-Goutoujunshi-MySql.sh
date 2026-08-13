@@ -70,7 +70,7 @@ SQL
         printf '{"ok":false,"error":"function_calls_changed"}\n' >&2
         return 3
     fi
-    printf '{"ok":true,"schema_version":3,"function_calls_unchanged":true}\n'
+    printf '{"ok":true,"schema_version":5,"function_calls_unchanged":true}\n'
 }
 
 backup_database() {

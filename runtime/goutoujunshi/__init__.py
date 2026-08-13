@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Any
 
 from . import repository
+from .enrichment import enrichment_tool_schema
 from .exporter import export_relationship, process_export_jobs
+from .search import search_relationship_events
 
 
 LOGGER = logging.getLogger(__name__)
@@ -29,6 +31,11 @@ BOUND_RELATIONSHIP_REQUEST = re.compile(
     r"我喜欢的(?:人|女生)|相亲对象|暧昧对象)"
 )
 CHANNEL_PREFIX = re.compile(r"^[\s【\[(]*(微信|抖音|朋友圈|线下|其他)[\s】\])：:,-]*")
+NON_RELATIONSHIP_COMMAND = re.compile(r"^\s*/[a-z][a-z0-9_-]*(?:\s|$)", re.IGNORECASE)
+DRAFT_NOT_SENT = re.compile(
+    r"(?:没发(?!现|烧|票|展|布|明|生|育)|未发送|还没发|没采用|没有采用|"
+    r"(?:那句|上一句|回复|建议|草稿|我).{0,6}改了|改了(?:再发|内容|说法|版本)|^\s*改了\s*$)"
+)
 _SESSION_BINDINGS: dict[str, dict[str, Any]] = {}
 _SESSION_OWNERS: dict[str, dict[str, str]] = {}
 _SESSION_MEDIA: dict[str, list[str]] = {}
@@ -298,15 +305,30 @@ def handle_get_context(args: dict[str, Any], **kwargs: Any) -> str:
 
 
 def handle_search_events(args: dict[str, Any], **kwargs: Any) -> str:
+    started = time.monotonic()
     try:
         binding = _binding_for_tool(args, kwargs)
-        events = repository.search_events(
+        result = search_relationship_events(
             binding,
-            str(args.get("query") or "").strip(),
-            str(args.get("channel") or "").strip() or None,
-            int(args.get("limit") or 30),
+            query=str(args.get("query") or "").strip(),
+            channel=str(args.get("channel") or "").strip() or None,
+            limit=int(args.get("limit") or 8),
+            include_drafts=bool(args.get("include_drafts", False)),
         )
-        return _json_ok(events=events)
+        retrieval = result["retrieval"]
+        _log_metric(
+            "relationship_search",
+            effective_mode=retrieval["effective_mode"],
+            degraded=retrieval["degraded"],
+            degradation_reason=retrieval["degradation_reason"],
+            channel_scope="explicit" if args.get("channel") else "all",
+            exact_candidates=retrieval["candidate_counts"]["exact"],
+            source_fulltext_candidates=retrieval["candidate_counts"]["source_fulltext"],
+            enrichment_candidates=retrieval["candidate_counts"]["enrichment_fulltext"],
+            result_count=len(result["events"]),
+            duration_ms=round((time.monotonic() - started) * 1000, 2),
+        )
+        return _json_ok(**result)
     except Exception as exc:
         return _tool_error(exc)
 
@@ -549,6 +571,7 @@ SCHEMAS = {
                             "enum": ["微信", "抖音", "朋友圈", "线下", "其他"],
                         },
                         "evidence_kind": {"type": "string"},
+                        "search_enrichment": enrichment_tool_schema(),
                         "current_inbound": {
                             "type": "boolean",
                             "description": "True for at most one newest confirmed received item in this Feishu message.",
@@ -596,11 +619,16 @@ SCHEMAS = {
     ),
     "relationship_search_events": _schema(
         "relationship_search_events",
-        "Search older events only inside the currently bound person.",
+        "Search older events with MySQL exact, Chinese full-text, and model-enriched text inside the currently bound person; omitted channel searches all channels.",
         {
-            "query": {"type": "string"},
+            "query": {"type": "string", "minLength": 1, "maxLength": 500},
             "channel": {"type": "string", "enum": ["微信", "抖音", "朋友圈", "线下", "其他"]},
-            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 20, "default": 8},
+            "include_drafts": {
+                "type": "boolean",
+                "default": False,
+                "description": "Include exact-match drafts; valid only with an explicit channel.",
+            },
         },
         ["query"],
     ),
@@ -967,9 +995,14 @@ def _context_prompt(
         + "\n\n你正在一个只服务当前用户的关系军师群。MySQL 是唯一权威来源。\n"
         f"当前绑定令牌：{token}\n"
         f"默认来源渠道：{binding['current_channel']}；用户消息开头的渠道前缀优先。\n"
-        "只处理当前绑定人物，禁止跨人物或跨渠道确认。区分 received、sent、draft、background、analysis、correction。"
-        "用户明确纠正优先。只有同一人物同一渠道随后出现 received，才可将上一 draft 追加确认为 sent。"
+        "只处理当前绑定人物，禁止跨人物或跨渠道写入和草稿确认。区分 received、sent、draft、background、analysis、correction。"
+        "回忆旧记录时默认调用 relationship_search_events 搜索该人物全部渠道；只有用户明确限定渠道时才传 channel。"
+        "检索返回的是可追溯候选，不等于已经确认的事实；降级或零结果时必须明确说明，不能推断为从未发生。"
+        "用户明确纠正优先。普通 owner 消息到达前，系统已按同一人物同一渠道规则处理上一 draft 的默认 sent 或未发送 correction。"
         "需要记录时只调用一次 relationship_commit_turn：合并本轮确认事件、精确草稿和必要快照补丁。"
+        "每个非 draft 事件同时填写 search_enrichment：summary 是不新增事实的短摘要；concepts 是主题概念；"
+        "aliases 是仅帮助找回原意的同义表达；entities 是原文实体；time_hints 是原文时间线索。"
+        "这些字段只用于检索，不能加入原文没有的人物、事件、因果、态度或结论。"
         "仅最新且说话人已确认的 received 可标记 current_inbound；仅它可设置 confirm_previous_draft。"
         "建议可复制回复时必须在 draft 中只保存建议正文，不保存分析。"
         "若消息来源仍不确定，先询问，不写成确定事实。不要代发微信或抖音。不要把友好推断为恋爱兴趣。"
@@ -1091,6 +1124,18 @@ def pre_gateway_dispatch(*, event: Any, gateway: Any, session_store: Any = None,
                 session_hash=hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:12],
             )
             return {"action": "allow"}
+        if source_ref and text and not NON_RELATIONSHIP_COMMAND.search(text):
+            channel_match = CHANNEL_PREFIX.search(text)
+            detected_channel = channel_match.group(1) if channel_match else str(binding["current_channel"])
+            draft_rule = repository.apply_next_message_draft_rule(
+                binding,
+                channel=detected_channel,
+                source_ref=source_ref,
+                denies_sending=bool(DRAFT_NOT_SENT.search(text)),
+            )
+            if draft_rule["changed"]:
+                _invalidate_prompts(relationship_id=int(binding["id"]))
+                _log_metric("draft_default_confirmation", action=draft_rule["action"], channel=detected_channel)
         prompt, prompt_reused = _cached_session_prompt(
             owner=owner,
             session_id=session_id,
