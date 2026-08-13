@@ -1,6 +1,6 @@
 # Wing-Dog
 
-![一对相爱的情侣在教父式 Wing-Dog 关系军师的见证下自然走到一起](assets/wing-dog-hero-v2.png)
+![一对相爱的成年男女在站立的教父式 Wing-Dog 关系军师见证下牵手相望](assets/wing-dog-hero-v2.png)
 
 **简体中文** | [English](README_EN.md)
 

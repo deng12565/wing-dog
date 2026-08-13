@@ -1,6 +1,6 @@
 # Wing-Dog
 
-![A loving couple comes together under the watch of Wing-Dog, their godfather-like relationship strategist](assets/wing-dog-hero-v2.png)
+![A loving adult man and woman hold hands under the watch of a standing, godfather-like Wing-Dog relationship strategist](assets/wing-dog-hero-v2.png)
 
 [简体中文](README.md) | **English**
 
