@@ -1,4 +1,4 @@
 interface:
-  display_name: "狗头军师"
-  short_description: "自然认识女生、判断双方互惠，并把关系推进到见面与确认"
-  default_prompt: "使用 $goutoujunshi 帮我判断当前恋爱阶段，并给一个自然的推进、观察或停止动作。"
+  display_name: "Wing-Dog"
+  short_description: "看清关系信号，给出自然、尊重边界的下一步"
+  default_prompt: "使用 Wing-Dog（$goutoujunshi）帮我判断当前恋爱阶段，并给一个自然的推进、观察或停止动作。"

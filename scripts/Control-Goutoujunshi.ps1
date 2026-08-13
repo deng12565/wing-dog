@@ -67,7 +67,7 @@ if ($Action -eq 'Start') {
     }
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         if (Test-GatewayConnected) {
-            Write-Host 'Goutoujunshi is running: MySQL healthy, Hermes Gateway healthy, Feishu connected.'
+            Write-Host 'Wing-Dog is running: MySQL healthy, Hermes Gateway healthy, Feishu connected.'
             return
         }
         Start-Sleep -Seconds 2
@@ -88,4 +88,4 @@ Stop-GatewayGracefully
 Stop-MySqlGracefully
 & wsl.exe --terminate Ubuntu 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Ubuntu WSL termination failed' }
-Write-Host 'Goutoujunshi stopped: supervisor, Hermes Gateway, MySQL, and Ubuntu WSL are stopped.'
+Write-Host 'Wing-Dog stopped: supervisor, Hermes Gateway, MySQL, and Ubuntu WSL are stopped.'

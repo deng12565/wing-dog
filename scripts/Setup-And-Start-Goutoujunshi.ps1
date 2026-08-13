@@ -26,7 +26,7 @@ $CodexAuth = Join-Path $env:USERPROFILE '.codex\auth.json'
 $CodexConfig = Join-Path $env:USERPROFILE '.codex\config.toml'
 $WslManagerWindows = Join-Path $ProjectRoot 'scripts\wsl\Manage-Goutoujunshi-MySql.sh'
 
-function Write-Step([string]$Message) { Write-Host "[goutoujunshi] $Message" }
+function Write-Step([string]$Message) { Write-Host "[Wing-Dog] $Message" }
 
 function Assert-Path([string]$Path, [string]$Label) {
     if (-not (Test-Path -LiteralPath $Path)) { throw "$Label not found: $Path" }

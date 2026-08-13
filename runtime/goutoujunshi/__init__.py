@@ -963,7 +963,7 @@ def _user_context_prompt(
         "当前群已绑定具体人物；个人记忆只描述用户本人，不能替代或污染下方的独立人物档案。"
     )
     return (
-        "以下是狗头军师跨群共享的用户本人档案，MySQL 是唯一权威来源。\n"
+        "以下是 Wing-Dog 跨群共享的用户本人档案，MySQL 是唯一权威来源。\n"
         f"当前个人记忆令牌：{token}\n"
         f"{boundary}"
         "用户明确说出新的、可复用的本人事实时，在同一工具轮调用 user_memory_remember。"

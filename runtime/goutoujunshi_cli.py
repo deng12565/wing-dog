@@ -303,7 +303,7 @@ def command_draft_review_resolve(args: argparse.Namespace) -> None:
 
 
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(description="Goutoujunshi relationship store maintenance")
+    result = argparse.ArgumentParser(description="Wing-Dog relationship store maintenance")
     sub = result.add_subparsers(dest="command", required=True)
     sub.add_parser("health").set_defaults(func=command_health)
     sub.add_parser("init").set_defaults(func=command_init)
