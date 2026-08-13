@@ -1,6 +1,6 @@
 # Wing-Dog
 
-![Wing-Dog, a warm and clear-headed AI relationship decision assistant](assets/wing-dog-hero.png)
+![A loving couple comes together under the watch of Wing-Dog, their godfather-like relationship strategist](assets/wing-dog-hero-v2.png)
 
 [简体中文](README.md) | **English**
 
