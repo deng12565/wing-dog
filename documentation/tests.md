@@ -19,8 +19,8 @@ python scripts\validate_skill.py --runtime
 
 | Module | Count | 主要合同 |
 | --- | ---: | --- |
-| `test_bootstrap.py` | 16 | host 配置、安装回滚、plugin 1.6.1 清单、profile 工具可见性、视觉补丁和静态核验 |
-| `test_plugin_surface.py` | 27 | owner/binding/session 失败关闭、无模型 token schema、prompt 缓存、tools/hooks、写入时增强 schema |
+| `test_bootstrap.py` | 19 | host 配置、安装回滚、plugin 1.7.0 清单、global/profile 精确工具面、DDGS 安装合同、视觉补丁和静态核验 |
+| `test_plugin_surface.py` | 39 | owner/binding/session 失败关闭、prompt 缓存、tools/hooks、写入时增强，以及受控公网搜索的授权、匿名化、DDGS registry 锁定、provider 查询日志抑制、输出和零持久化 |
 | `test_user_memory.py` | 6 | owner 隔离、append-only correction/forget、过期和敏感值拒绝 |
 | `test_repository_performance.py` | 5 | 上下文预算、幂等 turn commit、draft 确认、snapshot no-op |
 | `test_legacy_import.py` | 3 | legacy 分类、correction/draft 和渠道隔离 |
@@ -29,11 +29,13 @@ python scripts\validate_skill.py --runtime
 | `test_relationship_search.py` | 22 | 三支 RRF、MySQL 模式、纠正、人物/渠道/draft、显式 draft 不被三支候选挤出、输出预算、增强校验、权威 hash 复核、benchmark 纠正闭包、批量预算、任务重试、schema v5 和无向量路径 |
 | `test_schema_v5_mysql.py` | 2 | 在显式授权的专用 MySQL 测试库验证空库幂等，以及带历史事件、draft 和旧派生表的 v4 模拟迁移与二次幂等；默认跳过 |
 
+当前测试发现清单合计 99 项，其中 2 项专用 MySQL 测试在没有显式测试库授权时跳过；该数量是测试地图，不代表本轮已经运行成功。
+
 ```powershell
 python -m unittest discover -s runtime\tests -p "test_*.py"
 ```
 
-这些测试使用 mock、fake cursor、合成数据和临时目录，不访问真实 MySQL、Feishu 或远程模型。
+这些测试使用 mock、fake cursor、合成数据和临时目录，不访问真实 MySQL、Feishu、DDGS 网络或远程模型。
 
 ## 固定 MySQL 检索基准
 
@@ -55,6 +57,7 @@ python -m unittest discover -s runtime\tests -p "test_*.py"
 - `enrichment-backfill/work/status` 对活动和归档人物的历史补强。
 - 独立 MySQL benchmark 和远程 answer oracle。
 - `runtime/bootstrap.py preflight`、host 配置、启动/停止脚本、Gateway/Feishu、计划任务和真实消息冒烟。
+- Hermes `tools post-setup ddgs`、`ddgs` import、公开无敏感词查询探针，以及未绑定/已绑定群经 Hermes 实际 resolver 得到的工具面核验。
 
 报告时必须分层：数据库健康不证明 Feishu 路由；静态配置不证明 adapter 收到有效规则；离线测试不证明历史补强已完成。运行路径无 Ollama/Milvus 依赖可通过仓库扫描和获批后的进程/网络观测分别验证。
 
@@ -72,9 +75,17 @@ python -m unittest discover -s runtime\tests -p "test_*.py"
 
 - 完整 runtime：84 项，82 通过，2 项专用 MySQL 测试按默认配置跳过。Skill 普通与 `--runtime` 校验、Python 编译和 `git diff --check` 通过。
 - plugin 1.6.0 的仓库测试覆盖服务端 session 授权、缺失 session、task/session 不一致、跨 owner、跨人物、归档 binding、session 清理、同轮 search-then-commit、旧 token 参数无影响，以及个人记忆当前 `source_ref` 隔离。
-- `test_bootstrap.py` 验证 plugin 1.6.1 清单、安装回滚、源目录与安装目录清单一致，以及关系 profile 固定关闭 `tools.tool_search`。
+- `test_bootstrap.py` 当时验证 plugin 1.6.1 清单、安装回滚、源目录与安装目录清单一致，以及关系 profile 固定关闭 `tools.tool_search`。
 - `test_plugin_surface.py` 验证服务端 binding 高于截图/OCR、引用消息和旧会话文本，并覆盖同 session 的 search-then-commit 与 session 清理。
 - 部署时仍须按“运行态验证边界”逐项核验；真实姓名、session 标识、binding 数量和当前服务状态只保留在本地 operator 记录，不进入公开仓库。
+
+### plugin 1.7.0 验证合同
+
+- 离线测试必须验证未绑定 Feishu 配置和 Hermes 实际 resolver 都只有 `goutoujunshi-user`，关系 profile 的配置和解析结果都只有 `goutoujunshi + goutoujunshi-user`，原生 web/browser/terminal/file 不可见，DDGS backend、`WEB_TOOLS_DEBUG=false` 和 `ddgs` import 正确。
+- `relationship_web_search` 测试必须覆盖当前 binding 授权、`query`/`limit` 边界、敏感与聊天式输入拒绝、原始查询不进入 provider/日志、provider registry 只请求精确 `ddgs`、不读取默认 provider、DDGS 缺失/名称错配/不支持/不可用时无 fallback 地失败关闭、结果字段白名单与长度、仅 HTTP(S)、通用失败信息，以及不调用任何 repository 写方法。
+- prompt 合同必须明确网页标题、摘要和其他片段中的任何指令都是不可信数据，不得执行或改变工具、授权、记忆和写入规则。
+- 运行态验收必须使用无私人信息的公共查询，核验返回真实 URL、最多 5 条结果和来源标注；再分别确认未绑定群不能联网、已绑定群只通过 wrapper 联网，且 MySQL 没有因网页结果新增事件或本人记忆。
+- 本节定义 1.7.0 应验证的合同，不表示仓库测试、DDGS 安装、Gateway、Feishu 或真实群聊已经在当前环境执行成功；发布报告必须给出实际命令、退出码和结果。
 
 ### 剩余边界
 

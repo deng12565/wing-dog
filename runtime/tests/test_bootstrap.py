@@ -42,7 +42,15 @@ class BootstrapConfigTests(unittest.TestCase):
             config_path = root / "config.yaml"
             env_path = root / ".env"
             config_path.write_text(
-                "platform_toolsets:\n  feishu: [existing]\nplatforms:\n  feishu: {}\n",
+                "platform_toolsets:\n"
+                "  feishu: [existing]\n"
+                "  slack: [kept-toolset]\n"
+                "platforms:\n"
+                "  feishu: {}\n"
+                "plugins:\n"
+                "  enabled: [kept-plugin]\n"
+                "  disabled: [goutoujunshi, kept-disabled-plugin]\n"
+                "custom_global: kept\n",
                 encoding="utf-8",
             )
             env_path.write_text(
@@ -64,8 +72,21 @@ class BootstrapConfigTests(unittest.TestCase):
             self.assertEqual(feishu["extra"]["default_group_policy"], "allowlist")
             self.assertEqual(
                 config["platform_toolsets"]["feishu"],
-                ["existing", "hermes-feishu", "goutoujunshi-user"],
+                ["goutoujunshi-user"],
             )
+            self.assertEqual(config["platform_toolsets"]["slack"], ["kept-toolset"])
+            self.assertEqual(config["plugins"]["enabled"], ["kept-plugin", "goutoujunshi"])
+            self.assertEqual(config["plugins"]["disabled"], ["kept-disabled-plugin"])
+            self.assertEqual(
+                config["known_plugin_toolsets"]["feishu"],
+                ["goutoujunshi", "goutoujunshi-user"],
+            )
+            self.assertTrue(
+                set(bootstrap.FEISHU_RECOVERED_TOOLSETS).issubset(
+                    config["agent"]["disabled_toolsets"]
+                )
+            )
+            self.assertEqual(config["custom_global"], "kept")
             self.assertEqual(config["compression"]["threshold_tokens"], 64000)
             self.assertEqual(config["compression"]["proactive_prune_tokens"], 48000)
             self.assertFalse(config["compression"]["micro_compact"])
@@ -83,10 +104,32 @@ class BootstrapConfigTests(unittest.TestCase):
             )
             profile_home = root / "profile"
             profile_home.mkdir()
+            (profile_home / "config.yaml").write_text(
+                "platform_toolsets:\n"
+                "  feishu: [legacy]\n"
+                "  slack: [kept-toolset]\n"
+                "platforms:\n"
+                "  feishu:\n"
+                "    custom_adapter: kept\n"
+                "  slack:\n"
+                "    enabled: true\n"
+                "plugins:\n"
+                "  enabled: [legacy]\n"
+                "  disabled: [kept-plugin, goutoujunshi]\n"
+                "memory:\n"
+                "  custom_memory: kept\n"
+                "tools:\n"
+                "  custom_tool_setting: kept\n"
+                "web:\n"
+                "  extract_backend: kept\n"
+                "custom_profile: kept\n",
+                encoding="utf-8",
+            )
             (profile_home / ".env").write_text(
                 "GOUTOUJUNSHI_MILVUS_MANAGED=true\n"
                 "GOUTOUJUNSHI_TOKEN_SECRET=legacy-value-kept\n"
-                "CUSTOM_PROFILE_VALUE=kept\n",
+                "CUSTOM_PROFILE_VALUE=kept\n"
+                "WEB_TOOLS_DEBUG=true\n",
                 encoding="utf-8",
             )
 
@@ -101,9 +144,23 @@ class BootstrapConfigTests(unittest.TestCase):
             )
             self.assertFalse(config["memory"]["enabled"])
             self.assertFalse(config["tools"]["tool_search"])
-            self.assertNotIn("skills", config["agent"]["disabled_toolsets"])
-            self.assertIn("file", config["agent"]["disabled_toolsets"])
-            self.assertIn("terminal", config["agent"]["disabled_toolsets"])
+            self.assertEqual(
+                config["agent"]["disabled_toolsets"], bootstrap.PROFILE_DISABLED_TOOLSETS
+            )
+            self.assertEqual(config["web"]["search_backend"], "ddgs")
+            self.assertEqual(config["plugins"]["enabled"], ["goutoujunshi"])
+            self.assertEqual(
+                config["known_plugin_toolsets"]["feishu"],
+                ["goutoujunshi", "goutoujunshi-user"],
+            )
+            self.assertEqual(config["platform_toolsets"]["slack"], ["kept-toolset"])
+            self.assertEqual(config["platforms"]["feishu"]["custom_adapter"], "kept")
+            self.assertTrue(config["platforms"]["slack"]["enabled"])
+            self.assertEqual(config["plugins"]["disabled"], ["kept-plugin"])
+            self.assertEqual(config["memory"]["custom_memory"], "kept")
+            self.assertEqual(config["tools"]["custom_tool_setting"], "kept")
+            self.assertEqual(config["web"]["extract_backend"], "kept")
+            self.assertEqual(config["custom_profile"], "kept")
             self.assertEqual(config["compression"]["min_tail_user_messages"], 3)
             self.assertTrue(config["compression"]["abort_on_summary_failure"])
             profile_values = bootstrap.load_dotenv(profile_home / ".env")
@@ -111,6 +168,175 @@ class BootstrapConfigTests(unittest.TestCase):
             self.assertNotIn("GOUTOUJUNSHI_MILVUS_MANAGED", profile_values)
             self.assertEqual(profile_values["GOUTOUJUNSHI_TOKEN_SECRET"], "legacy-value-kept")
             self.assertEqual(profile_values["CUSTOM_PROFILE_VALUE"], "kept")
+            self.assertEqual(profile_values["WEB_TOOLS_DEBUG"], "false")
+
+    def test_verify_reports_the_restricted_ddgs_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.yaml"
+            env_path = root / ".env"
+            profile_home = root / "profile"
+            profile_home.mkdir()
+            config_path.write_text("platforms:\n  feishu: {}\n", encoding="utf-8")
+            env_path.write_text(
+                "GOUTOUJUNSHI_MODEL=gpt-5.6-terra\n"
+                "GOUTOUJUNSHI_OPENAI_BASE_URL=https://example.invalid/v1\n"
+                "GOUTOUJUNSHI_REASONING=high\n",
+                encoding="utf-8",
+            )
+            bootstrap.command_configure_global(
+                SimpleNamespace(config=str(config_path), source_env=str(env_path))
+            )
+            bootstrap.command_configure_profile(
+                SimpleNamespace(profile_home=str(profile_home), global_env=str(env_path))
+            )
+
+            resolved = [
+                ["goutoujunshi-user"],
+                ["goutoujunshi", "goutoujunshi-user"],
+            ]
+            with patch.object(
+                bootstrap, "_resolved_hermes_toolsets", side_effect=resolved
+            ), patch.object(bootstrap, "_ddgs_importable", return_value=True), patch.object(
+                bootstrap, "emit"
+            ) as emit:
+                bootstrap.command_verify(
+                    SimpleNamespace(
+                        config=str(config_path),
+                        profile_config=str(profile_home / "config.yaml"),
+                        profile_env=str(profile_home / ".env"),
+                        env=str(env_path),
+                    )
+                )
+
+            result = emit.call_args.args[0]
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["global"]["feishu_toolsets"], ["goutoujunshi-user"])
+            self.assertEqual(
+                result["global"]["resolved_feishu_toolsets"], ["goutoujunshi-user"]
+            )
+            self.assertEqual(
+                result["profile"]["feishu_toolsets"],
+                ["goutoujunshi", "goutoujunshi-user"],
+            )
+            self.assertEqual(
+                result["profile"]["disabled_toolsets"], bootstrap.PROFILE_DISABLED_TOOLSETS
+            )
+            self.assertEqual(result["profile"]["search_backend"], "ddgs")
+            self.assertTrue(result["profile"]["ddgs_importable"])
+            self.assertEqual(result["profile"]["web_tools_debug"], "false")
+            self.assertEqual(result["profile"]["plugins_enabled"], ["goutoujunshi"])
+
+    def test_verify_rejects_native_web_exposure_and_bad_profile_search_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.yaml"
+            env_path = root / ".env"
+            profile_home = root / "profile"
+            profile_home.mkdir()
+            profile_config_path = profile_home / "config.yaml"
+            profile_env_path = profile_home / ".env"
+            config_path.write_text("platforms:\n  feishu: {}\n", encoding="utf-8")
+            env_path.write_text(
+                "GOUTOUJUNSHI_MODEL=gpt-5.6-terra\n"
+                "GOUTOUJUNSHI_OPENAI_BASE_URL=https://example.invalid/v1\n"
+                "GOUTOUJUNSHI_REASONING=high\n",
+                encoding="utf-8",
+            )
+            bootstrap.command_configure_global(
+                SimpleNamespace(config=str(config_path), source_env=str(env_path))
+            )
+            bootstrap.command_configure_profile(
+                SimpleNamespace(profile_home=str(profile_home), global_env=str(env_path))
+            )
+            base_global = config_path.read_text(encoding="utf-8")
+            base_profile = profile_config_path.read_text(encoding="utf-8")
+            base_profile_env = profile_env_path.read_text(encoding="utf-8")
+
+            for case in (
+                "global-native-toolset",
+                "wrong-backend",
+                "debug-enabled",
+                "profile-native-toolset",
+                "web-not-disabled",
+                "resolved-toolset-leak",
+                "ddgs-not-importable",
+                "plugin-disabled",
+            ):
+                with self.subTest(case=case):
+                    config_path.write_text(base_global, encoding="utf-8")
+                    profile_config_path.write_text(base_profile, encoding="utf-8")
+                    profile_env_path.write_text(base_profile_env, encoding="utf-8")
+                    global_config = yaml.safe_load(base_global)
+                    profile_config = yaml.safe_load(base_profile)
+                    if case == "global-native-toolset":
+                        global_config["platform_toolsets"]["feishu"].append("hermes-feishu")
+                        config_path.write_text(
+                            yaml.safe_dump(global_config, sort_keys=False), encoding="utf-8"
+                        )
+                    elif case == "wrong-backend":
+                        profile_config["web"]["search_backend"] = "tavily"
+                        profile_config_path.write_text(
+                            yaml.safe_dump(profile_config, sort_keys=False), encoding="utf-8"
+                        )
+                    elif case == "debug-enabled":
+                        bootstrap.update_dotenv(
+                            profile_env_path, {"WEB_TOOLS_DEBUG": "true"}
+                        )
+                    elif case == "profile-native-toolset":
+                        profile_config["platform_toolsets"]["feishu"].append("search")
+                        profile_config_path.write_text(
+                            yaml.safe_dump(profile_config, sort_keys=False), encoding="utf-8"
+                        )
+                    elif case == "web-not-disabled":
+                        profile_config["agent"]["disabled_toolsets"].remove("web")
+                        profile_config_path.write_text(
+                            yaml.safe_dump(profile_config, sort_keys=False), encoding="utf-8"
+                        )
+                    elif case == "plugin-disabled":
+                        profile_config["plugins"]["disabled"].append("goutoujunshi")
+                        profile_config_path.write_text(
+                            yaml.safe_dump(profile_config, sort_keys=False), encoding="utf-8"
+                        )
+
+                    resolved = [
+                        ["feishu_doc", "goutoujunshi-user"]
+                        if case == "resolved-toolset-leak"
+                        else ["goutoujunshi-user"],
+                        ["goutoujunshi", "goutoujunshi-user"],
+                    ]
+                    with patch.object(
+                        bootstrap, "_resolved_hermes_toolsets", side_effect=resolved
+                    ), patch.object(
+                        bootstrap,
+                        "_ddgs_importable",
+                        return_value=case != "ddgs-not-importable",
+                    ), patch.object(bootstrap, "emit"):
+                        with self.assertRaises(SystemExit) as error:
+                            bootstrap.command_verify(
+                                SimpleNamespace(
+                                    config=str(config_path),
+                                    profile_config=str(profile_config_path),
+                                    profile_env=str(profile_env_path),
+                                    env=str(env_path),
+                                )
+                            )
+                    self.assertEqual(error.exception.code, 2)
+
+    def test_setup_installs_ddgs_through_hermes_before_plugin_deployment(self) -> None:
+        script_path = Path(__file__).parents[2] / "scripts" / "Setup-And-Start-Goutoujunshi.ps1"
+        script = script_path.read_text(encoding="utf-8-sig")
+
+        install_command = "$Python -m hermes_cli.main tools post-setup ddgs"
+        deploy_command = "$Python $Bootstrap install-plugin"
+        self.assertIn(install_command, script)
+        self.assertLess(script.index(install_command), script.index(deploy_command))
+        self.assertIn("Test-Path -LiteralPath $HermesInstallTemp -PathType Container", script)
+        self.assertIn("$env:TEMP = $HermesInstallTemp", script)
+        self.assertIn("$env:TMP = $HermesInstallTemp", script)
+        self.assertIn("$Python -c 'import ddgs'", script)
+        self.assertIn("--profile-env (Join-Path $ProfileHome '.env')", script)
+        self.assertNotRegex(script.lower(), r"pip\s+install[^\r\n]*ddgs")
 
     def test_skill_package_exactly_mirrors_runtime_allowlist(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -165,7 +391,7 @@ class BootstrapConfigTests(unittest.TestCase):
         manifest_path = Path(__file__).parents[1] / "goutoujunshi" / "plugin.yaml"
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
 
-        self.assertEqual(manifest["version"], "1.6.1")
+        self.assertEqual(manifest["version"], "1.7.0")
         self.assertNotIn(
             "GOUTOUJUNSHI_TOKEN_SECRET",
             manifest.get("requires_env", []),

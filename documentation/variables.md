@@ -21,10 +21,11 @@
 | `GOUTOUJUNSHI_OPENAI_BASE_URL` | Responses-compatible 主模型地址 | 从 Codex provider 派生 | 聊天/补强/预检失败 |
 | `GOUTOUJUNSHI_MODEL` | 当前远程主模型 | 安装目标 | 聊天/补强失败 |
 | `GOUTOUJUNSHI_REASONING` | reasoning effort | 安装目标 | 配置预检失败 |
+| `WEB_TOOLS_DEBUG` | 禁止 Hermes web provider 输出调试查询 | 关系 profile `.env` 固定 `false` | 可能扩大查询日志内容 |
 | `HERMES_HOME` | Hermes config/state/cache 根目录 | operator 脚本设置 | 宿主定位可能不同 |
 | `PYTHONPATH` | Hermes Python 根目录 | operator 脚本设置 | CLI 导入失败 |
 
-在线检索没有语义开关、Milvus/Ollama URL、embedding 模型或 RRF 环境变量。`RRF k=60` 和三支权重在实现中固定，避免部署配置漂移。
+MySQL 关系检索没有语义开关、Milvus/Ollama URL、embedding 模型或 RRF 环境变量。`RRF k=60` 和三支权重在实现中固定，避免部署配置漂移。公网搜索使用免 API key 的 DDGS，不新增搜索密钥；DDGS Python 包由 Hermes 官方 `tools post-setup ddgs` 安装。wrapper 经 provider registry 只接受精确 `ddgs`，不读取 active/default provider，也没有 fallback 配置。
 
 ## 独立 benchmark 变量
 
@@ -32,8 +33,9 @@
 
 ## 配置文件
 
-- `runtime/goutoujunshi/plugin.yaml`: v1.6.1 插件接口、工具与 hooks，无秘密值。
-- Hermes global/profile `config.yaml`: host-managed provider、toolset、route、compression 与 Feishu adapter 配置，不在仓库中。
+- `runtime/goutoujunshi/plugin.yaml`: v1.7.0 插件接口、6 个默认工具与 hooks，无秘密值。
+- Hermes global `config.yaml`: Feishu toolset 精确为 `goutoujunshi-user`，未绑定群不具备关系或公网搜索能力；文件不在仓库中。
+- Hermes 关系 profile `config.yaml`: Feishu toolsets 为 `goutoujunshi` 和 `goutoujunshi-user`，设置 `web.search_backend: ddgs`、`tools.tool_search: false`，并禁用原生 terminal、file、web、browser 等 toolsets；文件不在仓库中。bootstrap `verify` 还用 Hermes 实际 resolver 检查精确工具面，并直接 `import ddgs`，不能只信任 YAML 表面值。
 - `runtime/goutoujunshi/schema.sql`: schema v5，新增两个 MySQL 检索/任务表和 ngram FULLTEXT，无密码。
 - `scripts/wsl/Manage-Goutoujunshi-MySql.sh`: 面向仓库外的 WSL Docker MySQL；调用具有副作用。
 
@@ -41,7 +43,8 @@
 
 - 不回显 `.env`、auth、token、密码、cookie、私钥、session 或人物标识。
 - v1.6.0 起不再生成或使用 `GOUTOUJUNSHI_TOKEN_SECRET`；升级时保留现有 `.env` 中的旧值，避免无关配置改写，但该值不参与授权。
-- 关系 profile 固定 `tools.tool_search: false`，保证受控关系工具直接可见；该值不是环境变量，也不影响默认 profile。
+- 关系 profile 固定 `tools.tool_search: false`，保证 6 个受控插件工具直接可见；该值不是环境变量。未绑定群仍只使用全局 `goutoujunshi-user` toolset。
+- 不记录公网搜索原始查询或完整净化查询；wrapper 日志只允许净化后查询的 SHA256、长度、耗时、结果数和状态。
 - `.local/`、`.env*`、dump、backup、log、关系 handoff、import package 和投影不得进入 Git。
 - 安装、预检、schema、回填和 benchmark 可能读取凭据或访问外部系统，执行前需要明确授权。
 - commit 前检查准确 staged 路径，并扫描秘密赋值和私密关系材料。

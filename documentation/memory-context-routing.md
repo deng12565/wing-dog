@@ -1,11 +1,12 @@
 # 飞书关系消息端到端链路
 
-本文解释一条飞书关系消息从进入 Hermes 到产生回复、写入 MySQL、生成只读投影的完整过程，重点回答四个问题：
+本文解释一条飞书关系消息从进入 Hermes 到产生回复、按需核验公共信息、写入 MySQL、生成只读投影的完整过程，重点回答五个问题：
 
 1. 系统里到底有哪几种“记忆”？
 2. 每轮给模型加载了哪些上下文？
 3. 群、人物、知识和旧记录分别怎么路由？
 4. 哪些内容在什么时候写入，哪些内容不会写入？
+5. 公网搜索何时允许、如何匿名化，结果与关系记忆有什么区别？
 
 本文只描述当前仓库源码和离线测试能够证明的行为，不代表本机此刻的 MySQL、Hermes Gateway、飞书连接、计划任务或远程模型处于健康状态。文中的“小林”、群、消息和数据 ID 均为虚构示例。
 
@@ -18,7 +19,8 @@
   -> Hermes 建立或恢复短期 session
   -> 插件校验 owner、群路由和人物 binding
   -> 插件加载本人记忆与当前人物的有界上下文
-  -> 模型按需搜索旧事件、读取 Skill 参考资料并形成建议
+  -> 模型按需搜索旧事件；必要时在绑定群匿名查询当前公共信息
+  -> 模型读取 Skill 参考资料并形成建议
   -> 模型成功调用受控工具后，当前事件、草稿和快照才写入 MySQL
   -> MySQL 事务成功后排队生成只读 Markdown 投影
 ```
@@ -27,7 +29,7 @@
 
 当前消息里的新 `received`、本轮回复 `draft` 和关系快照不会仅因消息到达而自动写入。它们依赖模型成功调用 `relationship_commit_turn`。同样，模型没有成功调用 `user_memory_remember` 时，一句本人事实也不会仅因出现在聊天里就自动成为跨群个人记忆。
 
-## 一、先区分三种记忆和两种派生数据
+## 一、先区分三种记忆、两种派生数据和临时联网结果
 
 日常说的“记忆”在这里至少包含三层。把它们混为一谈，就很容易误解 `/new`、跨群共享、人物隔离和 Markdown 投影。
 
@@ -38,6 +40,7 @@
 | 人物关系记忆 | 某一人物的 profile、渠道、事件、草稿、快照和修正 | 一个 owner 下的单一人物；渠道状态继续隔离 | 已绑定关系群构建上下文或按需搜索时 | 关系命令、入口草稿规则或关系提交工具成功时 | 是，关系数据的权威源 |
 | 检索文档和补强任务 | 权威事件原文副本/hash、检索摘要、概念、别名、实体和时间线索 | 跟随单一关系事件 | 只在搜索候选阶段使用 | 每个非 draft 事件写入时同步创建或排队 | 否，只是检索派生数据 |
 | `.local/relationships/*.md` | profile 与完整事件时间线的只读审阅视图 | 单一人物文件 | Codex 或人工审阅时 | MySQL 事务后异步导出，或 `/relation export` 立即导出 | 否，不能反向覆盖 MySQL |
+| 公网搜索结果 | DDGS 返回的网页标题、URL 和摘要 | 已绑定关系群的当前 Hermes session | 明确需要当前公共信息时 | 不持久化；只作为当轮 tool 消息 | 否，不是关系记忆或确认事实 |
 
 ### 1. Hermes 短期 session
 
@@ -79,9 +82,9 @@ Hermes session 负责让模型记得同一会话刚才聊了什么、调用了�
 
 `.local/relationships/*.md` 也是从 MySQL 重新读取后生成的结果。即使投影生成失败，已经提交的 MySQL 事务仍然有效；反过来手工编辑投影也不构成关系数据修正。
 
-## 二、三种“路由”分别怎么路
+## 二、四种“路由”分别怎么路
 
-系统里同时存在接入路由、知识路由和历史检索路由。三者解决的问题不同。
+系统里同时存在接入路由、知识路由、历史检索路由和公网搜索路由。四者解决的问题不同。
 
 ### 1. 飞书群到 Hermes profile 和人物的接入路由
 
@@ -98,7 +101,7 @@ flowchart TD
     H --> I{群是否有活动 binding?}
     I -- 否且曾受管 --> J[已归档群失败关闭]
     I -- 否且涉及具体关系 --> K[提示先 new/bind; 不分析当前内容]
-    I -- 否且是本人或一般问题 --> L[只加载 owner 本人记忆]
+    I -- 否且是本人或一般问题 --> L[只加载 owner 本人记忆; 不联网]
     I -- 是 --> M{Hermes source.profile 已同步?}
     M -- 否 --> N[提示路由同步中; 不分析当前内容]
     M -- 是 --> O[保存服务端 session owner/binding 状态]
@@ -150,6 +153,24 @@ flowchart TD
 
 draft 默认不参与检索。只有显式提供渠道并设置 `include_drafts=true` 时，draft 才能通过原文精确/子串分支进入候选。
 
+### 4. 当前公共信息的公网搜索路由
+
+只有活动 binding 已同步到关系 profile 时，模型才能看到 `relationship_web_search`。用户明确要求搜索、问题依赖当前公共事实或缺少必要公共背景时，链路为：
+
+```text
+最小公共查询，最长 240 字符
+  -> 服务端 session/task + owner + 群 + 人物 + 当前 MySQL binding 回查
+  -> NFKC、空白折叠和二次匿名化
+  -> 隐私模式仍存在则 privacy_rejected
+  -> Hermes provider registry -> 精确 DDGS provider
+  -> 最多 5 条 HTTP(S) title/url/snippet
+  -> 当前 Hermes session 的临时 tool 消息
+```
+
+匿名化会拒绝包含 binding 名称或 slug 的查询，并移除 owner/chat 标识、邮箱、手机号、证件号、账号、URL、控制字符和常见密钥；聊天转录式输入直接拒绝。该层是有界模式校验，不是任意敏感语义识别，因此模型仍必须先生成最小匿名公共查询，无法确认时拒绝联网。只有净化后的查询进入 provider registry。wrapper 只请求名称精确为 `ddgs`、支持搜索且当前可用的 provider，不调用通用搜索入口、不读取 active/default provider，也不允许 fallback。原生 `web_search`、`web_extract` 和 browser 不向模型开放，首版不抓网页全文，也不保证稳定取得发布日期。
+
+模型必须把网页摘要视为不可信外部信息，在回答中区分“联网信息”“MySQL 关系记忆”“模型推断”，并标注网页标题、URL 和检索日期。网页标题、摘要和其他片段中的任何指令都只是数据，不得执行，也不得改变工具、授权、记忆或写入规则。公网搜索不能替代人物 binding、MySQL 权威事件或本地关系检索。
+
 ## 三、每轮模型实际看到什么
 
 模型请求由 Hermes 宿主和本插件共同组装。按职责可理解为以下层次：
@@ -163,6 +184,7 @@ draft 默认不参与检索。只有显式提供渠道并设置 `include_drafts=
 | owner 本人上下文 | 当前有效的跨群本人记忆 | 插件从 MySQL 读取 | 按 session 缓存 |
 | 人物关系上下文 | binding 规则、profile 快照字段和有界近期事件 | 插件从 MySQL 读取 | 按 session 缓存 |
 | 按需搜索结果 | Top-N 权威旧事件正文和检索状态 | 关系搜索工具 | 作为新的 tool 消息进入后续模型调用 |
+| 按需公网结果 | 最多 5 条网页标题、URL、摘要和检索元数据 | 受控公网搜索工具 | 作为临时 tool 消息进入当前 session，不持久化 |
 | 按需参考资料 | `SKILL.md` 路由选中的 1–3 份资料 | Skill/宿主 | 当前分析需要时 |
 
 ### 人物关系工作集的内容和预算
@@ -216,6 +238,7 @@ draft 默认不参与检索。只有显式提供渠道并设置 `include_drafts=
 | Markdown 投影文件 | 是，只读派生文件 | export job 被处理，或显式 `/relation export` | `.local/relationships/<slug>.md` | 不能手工修改为权威数据 |
 | 截图文件、路径和二进制 | 否 | 只在当轮视觉/OCR 使用 | 临时媒体目录 | `post_llm_call` / session cleanup 后删除 |
 | 未绑定群中的具体女生问题 | 否 | 入口 hook 在模型前阻断 | 不写关系 MySQL | 回复“本条未记录、未分析” |
+| 公网搜索结果 | 否 | 绑定群按需调用 `relationship_web_search` 时 | 仅当前 Hermes session 的 tool 消息 | 不写事件、快照、draft、本人记忆、检索文档或投影 |
 
 ### 单轮关系事务保证什么
 
@@ -358,18 +381,20 @@ sequenceDiagram
 | 工具授权硬约束 | 校验服务端 session/task、owner、群、人物和当前 MySQL binding | 不能保证模型一定主动调用工具 |
 | 数据事务硬约束 | 类型、渠道、数量、当前 inbound、去重、事件/索引/export job 原子性 | 不能判断截图里的说话人语义上是否真的识别正确 |
 | prompt/Skill 引导 | 要求区分事实/推断/未知，截图先搜索再提交，只保存精确 draft | 模型仍可能漏掉搜索、提交或本人记忆工具调用 |
-| `tools.tool_search: false` | 让 5 个受控工具 schema 每轮直接可见，减少工具未披露 | 不等于强制模型调用，也不等于工具调用成功 |
+| `tools.tool_search: false` | 让 6 个受控工具 schema 每轮直接可见，减少工具未披露 | 不等于强制模型调用，也不等于工具调用成功 |
+| 公网搜索 wrapper | 硬校验 binding、二次匿名化、限制为 5 条标题/URL/摘要 | 不能保证外部网页正确、完整或没有恶意内容 |
 | 投影任务 | MySQL 成功后可异步重试只读投影 | 投影成功与否不能改变 MySQL 权威结果 |
 
-当前默认注册并直接暴露的 5 个工具是：
+关系 profile 当前默认注册并直接暴露的 6 个工具是：
 
 1. `relationship_commit_turn`
 2. `relationship_search_events`
 3. `user_memory_remember`
 4. `user_memory_correct`
 5. `user_memory_forget`
+6. `relationship_web_search`
 
-虽然源码保留部分兼容 handler，它们不在当前 `DEFAULT_TOOL_NAMES` 和 `plugin.yaml` 的默认工具清单中。
+未绑定群只有 `goutoujunshi-user` 的 3 个本人记忆工具。虽然源码保留部分兼容 handler，它们不在当前 `DEFAULT_TOOL_NAMES` 和 `plugin.yaml` 的默认工具清单中；Hermes 原生 web/browser 工具也不在模型可见清单中。
 
 最重要的结果是：prompt 说“必须搜索、必须提交”属于强引导，但当前没有一个 post-hook 会在模型漏调用时自动补写当前 `received` 或 draft。若工具没有被调用、授权失败或事务失败，本轮当前关系数据就没有成功写入 MySQL。运行指标可以记录 `tool_calls` 和 `tool_rounds`，但指标本身也不会代替写入。
 
@@ -387,6 +412,9 @@ sequenceDiagram
 | 截图说话人或来源不确定 | 模型应只问一个必要问题 | 不应写成确定 `received` |
 | 搜索增强覆盖不完整 | 返回权威正文并标记降级 | 不把增强内容当事实 |
 | 搜索零结果 | 只能说本次未检索到 | 不生成“从未发生”的事实 |
+| 公网查询未通过匿名化 | 返回 `privacy_rejected`，不发出请求 | 否；不持久化查询或结果 |
+| DDGS 未注册、名称错配、不支持搜索、不可用、超时或异常 | 返回 `web_search_unavailable`，明确本次未联网核验 | 否；不 fallback，也不以模型知识冒充搜索结果 |
+| 网页结果为空 | 明确本次未找到可用公共来源 | 否；不生成“网上没有”的确定事实 |
 | `relationship_commit_turn` 任一字段非法 | 整个本轮关系事务回滚 | 否 |
 | 投影生成失败 | export job 标记 failed，后续可重试 | MySQL 已提交内容仍有效 |
 | 主模型跳过关系提交工具 | 仍可能生成文本回答，但无自动补写 | 当前 `received` / draft 不会进入 MySQL |
@@ -407,6 +435,7 @@ sequenceDiagram
 | 人物绑定和近期上下文 | `runtime/goutoujunshi/repository.py` | `get_binding`、`recent_context` |
 | 权威事件与检索文档 | `runtime/goutoujunshi/database.py` | `append_event_with_status`、`upsert_event_search_document` |
 | 旧事件检索 | `runtime/goutoujunshi/search.py` | `search_relationship_events`、`reciprocal_rank_fusion` |
+| 受控公网搜索 | `runtime/goutoujunshi/__init__.py` | `relationship_web_search` handler、查询匿名化、DDGS registry 锁定与结果收敛 |
 | 只读投影 | `runtime/goutoujunshi/exporter.py` | `export_relationship`、`process_export_jobs` |
 | 表结构 | `runtime/goutoujunshi/schema.sql` | profile、binding、event、snapshot、search、job、user memory 表 |
 
@@ -418,6 +447,8 @@ sequenceDiagram
 - **export job 还没完成**：Markdown 可能暂时旧，但 MySQL 仍是最新权威状态。
 - **发送 `/new`**：只换短期模型会话，长期记忆仍在。
 - **未绑定或权威状态不可用**：停止具体关系分析，不使用通用猜测兜底。
+- **`relationship_web_search` 成功**：只表示当前 session 取得了带 URL 的临时网页摘要，不等于关系记忆已经更新。
+- **公网搜索失败**：明确说明没有完成联网核验，不把模型既有知识包装成搜索结果。
 
 ## 相关文档
 

@@ -28,6 +28,7 @@ Wing-Dog 不是替用户做主的“感情裁判”，而是同时处理情绪�
 8. 跨学科按需路由：只加载当前必要资料，不全量塞入上下文。
 9. 明确停止条件：把“再看看”变成可观察、可退出的行动计划。
 10. 可追溯关系回忆：搜索只返回 MySQL 权威事件，派生增强只帮助找到它们。
+11. 受控公共信息核验：只在已绑定关系群按需联网，查询先匿名化，结果附来源且不自动进入记忆。
 
 ## 非目标
 
@@ -36,7 +37,8 @@ Wing-Dog 不是替用户做主的“感情裁判”，而是同时处理情绪�
 - 不帮助绕过同意、拒绝、隐私或法律边界。
 - 不用 MBTI、性别、性取向或星座决定关系命运。
 - 不向微信、抖音或任何女性自动代发消息。
-- 不在本批实现联网搜索、向量检索或本地 embedding。
+- 不提供未绑定群联网、通用浏览器、网页全文抓取或原生 Hermes web 工具直连。
+- 不实现向量检索或本地 embedding。
 
 ## 产品成功信号
 
@@ -44,6 +46,7 @@ Wing-Dog 不是替用户做主的“感情裁判”，而是同时处理情绪�
 - 给出明确建议、理由、下一步和停止条件。
 - 普通推进不反复劝退，持续低互惠时不继续加码。
 - 同一人物旧事实可被有界检索召回，不要求全量历史进入上下文。
+- 需要当前公共信息时只发送匿名化最小查询，并把联网信息、MySQL 关系记忆和模型推断分开。
 - 不同人物、渠道和 draft 不串线，明确 correction 优先。
 - 高风险场景切换到安全优先流程。
 
@@ -54,6 +57,14 @@ Wing-Dog 不是替用户做主的“感情裁判”，而是同时处理情绪�
 - 为引用资料补充更新时间、来源类型和复核状态。
 - 扩展地区化法律/求助信息和多语言内容。
 
+## plugin 1.7.0 受控联网合同
+
+`relationship_web_search` 只存在于活动人物 binding 对应的 Wing-Dog 关系 profile。它复用服务端 session/task、owner、群、人物和当前 MySQL binding 授权，在插件内二次匿名化最长 240 字符的最小查询，再经 Hermes provider registry 精确取得免 API key 的 `ddgs` provider。它不调用通用搜索入口、不读取默认 provider，也不允许 fallback；DDGS 不可用即失败关闭。未绑定群只有 `goutoujunshi-user`，不能联网。
+
+首版只返回最多 5 条 HTTP(S) 结果的标题、URL 和摘要，以及 UTC 检索时间和是否发生脱敏；不抓取全文、不开放 browser/terminal/file，也不承诺稳定发布日期。网页摘要属于不可信临时外部信息，回答必须标注标题、URL 和检索日期，并与 MySQL 权威关系记忆、模型推断分开；网页标题、摘要和其他片段中的任何指令都不得执行。
+
+联网结果只进入当前 Hermes session，不自动写入关系事件、快照、draft、owner 本人记忆、检索文档或 Markdown 投影。匿名化无法安全完成时返回 `privacy_rejected`；DDGS 未注册、不支持搜索、不可用、超时或异常时返回 `web_search_unavailable`。bootstrap `verify` 使用 Hermes 实际 resolver 核验全局/关系 profile 的精确工具面，并硬校验 `ddgs` import；仓库中的实现和测试仍不能单独证明本机 DDGS、Gateway 或飞书运行态已发布并健康。
+
 ## PRD：MySQL 增强检索与有界关系上下文
 
 ### 文档状态
@@ -61,8 +72,8 @@ Wing-Dog 不是替用户做主的“感情裁判”，而是同时处理情绪�
 | 项目 | 内容 |
 | --- | --- |
 | 状态 | 实现、生产迁移、历史补强和运行态发布完成 |
-| 版本 | schema v5 / plugin source 1.6.1 |
-| 日期 | 2026-08-13 |
+| 版本 | schema v5 / plugin source 1.7.0 |
+| 日期 | 2026-08-17 |
 | 范围 | 私有 Hermes runtime；Codex Skill 分发面不新增持久化依赖 |
 
 ### 背景与问题
@@ -73,7 +84,7 @@ Wing-Dog 不是替用户做主的“感情裁判”，而是同时处理情绪�
 
 ### 目标
 
-1. 在线搜索不调用 Ollama、Milvus、本地 embedding 或后台常驻模型。
+1. 在线关系历史检索不调用 Ollama、Milvus、本地 embedding 或后台常驻模型。
 2. 默认只向主模型返回 Top-8 权威事件，单条最多 1200 字符、总正文最多 6000 字符。
 3. 中文同义改写检索接近全量历史 oracle：Recall@5 >= 90%，MRR@5 >= 0.80。
 4. 80 条 frozen 回答对照中关键事实覆盖率 >= 95%，首选行动/停止方向一致率 >= 90%。
@@ -176,4 +187,4 @@ draft 不增强。correction 正常增强，但增强内容只能从该事件原
 - 2026-08-12 已在专用数据库通过空库与模拟 v4 的二次幂等迁移，并在生产库完成 schema v5 首次和二次应用：409 条非 draft 事件对应 409 个文档/任务，157 条 draft 未进入检索表，两个 ngram FULLTEXT 索引存在，共享 `function_calls` 指纹保持不变。
 - 409 条历史任务已全部补强为 `enriched/done`，权威 source hash 409/409 一致；其中 408 条一次成功，1 条模型遗漏经一次明确单条重试成功，无 pending/running/failed 或残留错误。
 - 10000 条合成检索与 80 条 frozen answer oracle 已通过：语义 Recall@5 100%、MRR@5 0.873、精确 Recall@5 100%、纠正闭包 Recall@1 100%、线上数据库路径 P95 168.86ms/max 185.52ms、关键事实覆盖 100%、行动方向一致 97.5%。
-- plugin 1.5.0 曾发布到 Hermes 并通过计划任务、Gateway、Feishu websocket、远程 text/image/function preflight、owner 路由、人物/渠道/draft 隔离、输出边界及数据库失败关闭验证。plugin 1.6.0 于 2026-08-13 部署服务端 session 授权后，真实截图暴露旧会话/截图机器人文字污染和关系工具被 `tool_search` 延迟披露的问题；plugin 1.6.1 已增加绑定信任优先级、让关系 profile 的受控工具直接可见，并在干净新会话下重新部署，仍待真实飞书 search-then-commit 写入验收。生产历史的 14 条 correction 均无 `supersedes_event_id`，因此真实 correction closure 没有现成样本，证据来自专用 MySQL fixture 与自动测试。
+- plugin 1.5.0 曾发布到 Hermes 并通过计划任务、Gateway、Feishu websocket、远程 text/image/function preflight、owner 路由、人物/渠道/draft 隔离、输出边界及数据库失败关闭验证。plugin 1.6.0 于 2026-08-13 部署服务端 session 授权后，真实截图暴露旧会话/截图机器人文字污染和关系工具被 `tool_search` 延迟披露的问题；plugin 1.6.1 增加了绑定信任优先级并让关系 profile 的受控工具直接可见。plugin 1.7.0 的仓库合同新增绑定群受控公网搜索；其源码存在不构成 DDGS、Gateway 或真实飞书运行态健康证据。生产历史的 14 条 correction 均无 `supersedes_event_id`，因此真实 correction closure 没有现成样本，证据来自专用 MySQL fixture 与自动测试。

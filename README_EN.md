@@ -12,7 +12,7 @@
 
 Wing-Dog is an AI relationship decision assistant built for real conversations and real constraints. Instead of reducing every situation to "be brave and chase" or "walk away now," it separates facts, inferences, and unknowns; weighs reciprocity, practical constraints, risk, opportunity cost, and long-term options; and ends with something usable: a message, an invitation, an observation signal, or a clear stop action.
 
-This project is an adaptation and extension of [powerycy/goutoujunshi](https://github.com/powerycy/goutoujunshi). It is not an original-from-scratch work, and it does not imply upstream participation or endorsement. Wing-Dog retains the upstream relationship-advice Skill while adding Hermes and Feishu integration, authoritative MySQL storage, person and channel isolation, cross-channel retrieval, resumable enrichment jobs, and local operations. The upstream license and its Required Notice remain intact in [LICENSE](LICENSE).
+This project is an adaptation and extension of [powerycy/goutoujunshi](https://github.com/powerycy/goutoujunshi). It is not an original-from-scratch work, and it does not imply upstream participation or endorsement. Wing-Dog retains the upstream relationship-advice Skill while adding Hermes and Feishu integration, authoritative MySQL storage, person and channel isolation, cross-channel retrieval, privacy-bounded public web search, resumable enrichment jobs, and local operations. The upstream license and its Required Notice remain intact in [LICENSE](LICENSE).
 
 ## How it helps
 
@@ -23,6 +23,7 @@ This project is an adaptation and extension of [powerycy/goutoujunshi](https://g
 | The other person is inconsistent | Separates pacing differences and temporary pressure from sustained imbalance, with observation and stop signals |
 | There are many screenshots or unclear speakers | Resolves authorship and sequence first, and treats only visible text and behavior as facts |
 | History is split across WeChat, Douyin, Moments, and offline contact | Searches across channels for the same person while keeping drafts and sent-state channel-specific |
+| Advice depends on current public information | Searches only on demand in a bound relationship group, anonymizes the query first, and cites the page title, URL, and retrieval date |
 | You are getting to know several people | Keeps each relationship independent and compares reciprocity, reliability, attraction, values, and feasibility |
 | There is no current person | Starts from real life and sustainable ways to meet people, without inventing a target or imposing a deadline |
 | There is a clear refusal or safety risk | Stops escalation; prioritizes safety for control, stalking, coercion, fraud, or violence |
@@ -38,6 +39,7 @@ Relationship-advice Skill
             +-- Feishu / Hermes: mobile entry point and owner verification
             +-- MySQL: authoritative people, channels, events, and owner memory
             +-- Search: source text + ngram + bounded enrichment retrieval
+            +-- Web: anonymized, read-only public search in bound groups only
             +-- Projection: generated read-only relationship review files
 ```
 
@@ -45,6 +47,7 @@ Relationship-advice Skill
 - **Bounded relationship memory** with independent people and channels; only owner facts are shared across groups.
 - **Explicit message state** separating `received`, `sent`, `draft`, `background`, `analysis`, and `correction`.
 - **Authoritative retrieval** where derived summaries help find events but are never returned as facts.
+- **Anonymized web queries** for necessary public facts, returning titles, URLs, and snippets without automatically persisting them as relationship memory.
 - **Server-side authorization** where relationship and owner-memory tools use Hermes session state and recheck the owner, chat, and current person binding without model-copied tokens.
 - **Fail-closed behavior** when MySQL is unavailable or the active person binding is ambiguous.
 - **Advice only**: Wing-Dog never sends messages to WeChat, Douyin, or another external contact on the user's behalf.
@@ -54,7 +57,7 @@ Relationship-advice Skill
 The repository maintains two surfaces with different trust boundaries:
 
 1. **Distributable Codex Skill**: `SKILL.md`, `agents/`, `references/`, and `tests/` provide behavior, on-demand knowledge, and scenarios. The Skill alone has no database, background service, or external-message writer.
-2. **Private Hermes runtime**: `runtime/` and the operations scripts integrate Feishu, Hermes Gateway, and WSL/Docker MySQL for identity checks, person binding, persistence, retrieval, and read-only projections.
+2. **Private Hermes runtime**: `runtime/` and the operations scripts integrate Feishu, Hermes Gateway, and WSL/Docker MySQL for identity checks, person binding, persistence, relationship retrieval, controlled public web search, and read-only projections.
 
 Neither surface proves the other is healthy. Repository code does not prove that a local deployment is running, and installing the Skill does not automatically provide Feishu or persistent relationship memory. See the [architecture document](documentation/architecture.md) for details.
 
@@ -109,7 +112,13 @@ Schema v5 uses MySQL 8 `ngram` FULLTEXT and combines three candidate branches in
 2. Ngram full-text retrieval against authoritative source text.
 3. Retrieval against bounded summaries, concepts, aliases, entities, and time hints.
 
-After fixed RRF ranking, the runtime hydrates authoritative event bodies from MySQL and includes the correction closure. It returns at most eight events by default. Enrichment text is a retrieval aid only and is never presented as factual event content. Online retrieval does not require Ollama, Milvus, or local embeddings.
+After fixed RRF ranking, the runtime hydrates authoritative event bodies from MySQL and includes the correction closure. It returns at most eight events by default. Enrichment text is a retrieval aid only and is never presented as factual event content. Relationship-history retrieval does not require Ollama, Milvus, or local embeddings.
+
+## Controlled public web search
+
+Hermes plugin 1.7.0 exposes `relationship_web_search` only inside a Wing-Dog relationship group with an active person binding. The tool rechecks the owner, chat, and current MySQL binding from server-side session state, applies a second anonymization pass to a minimal query, and then asks the Hermes provider registry for the exact keyless `ddgs` provider. It never calls the generic search entry point or falls back to another provider; missing or unavailable DDGS fails closed. Unbound groups have owner-memory tools only and cannot search the web.
+
+Each search returns at most five titles, URLs, and snippets. It does not fetch full pages, expose a browser, or promise a reliable publication date. Responses must separate web information, authoritative MySQL relationship memory, and model inference, and cite the title, URL, and retrieval date for web material. Any instruction inside a page title, snippet, or other web text is untrusted data and must never be executed. Results stay in the current Hermes session and are not automatically written to events, snapshots, drafts, owner memory, or Markdown projections. Anonymization rejection, timeout, and provider failure are reported as explicit degradation.
 
 ## Repository layout
 
@@ -139,7 +148,7 @@ python scripts\validate_skill.py
 python -m unittest discover -s runtime\tests -v
 ```
 
-The first command validates the Skill structure, budget, links, and runtime boundary. The second covers the plugin, data rules, retrieval, exports, routing, and isolated bootstrap behavior. Neither command proves that a real MySQL, Hermes, Feishu, scheduled task, or external model is currently healthy.
+The first command validates the Skill structure, budget, links, and runtime boundary. The second covers the plugin, data rules, relationship retrieval, controlled public web search, exports, routing, and isolated bootstrap behavior. Neither command proves that a real MySQL, Hermes, DDGS, Feishu, scheduled task, or external model is currently healthy.
 
 Further reading: [Product](documentation/product.md) · [Architecture](documentation/architecture.md) · [Flows](documentation/flows.md) · [Variables and secrets](documentation/variables.md) · [Permissions](documentation/permissions.md) · [Tests](documentation/tests.md)
 

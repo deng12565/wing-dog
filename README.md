@@ -12,7 +12,7 @@
 
 Wing-Dog 是一个面向真实关系场景的 AI 恋爱决策助手。它不会只说“勇敢去追”或“赶紧放弃”，而是先区分事实、推测与未知，再综合互惠、现实条件、风险、机会成本和长期选择权，最后给出一句可发送的话、一次具体邀约、一个观察信号，或一个明确的停止动作。
 
-本项目是对 [powerycy/goutoujunshi](https://github.com/powerycy/goutoujunshi) 的改造与扩展，不是从零原创，也不代表上游作者参与或认可本分支。Wing-Dog 保留了上游的关系建议 Skill，并增加了 Hermes/飞书接入、MySQL 权威存储、人物与渠道隔离、多渠道检索、历史补强任务和本机运维能力。许可证及原作者 Required Notice 完整保留在 [LICENSE](LICENSE) 中。
+本项目是对 [powerycy/goutoujunshi](https://github.com/powerycy/goutoujunshi) 的改造与扩展，不是从零原创，也不代表上游作者参与或认可本分支。Wing-Dog 保留了上游的关系建议 Skill，并增加了 Hermes/飞书接入、MySQL 权威存储、人物与渠道隔离、多渠道检索、隐私受控的公网搜索、历史补强任务和本机运维能力。许可证及原作者 Required Notice 完整保留在 [LICENSE](LICENSE) 中。
 
 ## 它如何帮你
 
@@ -23,6 +23,7 @@ Wing-Dog 是一个面向真实关系场景的 AI 恋爱决策助手。它不会�
 | 对方忽冷忽热 | 区分节奏差异、暂时压力和持续失衡，设置观察信号与停止条件 |
 | 聊天截图很多、说话人复杂 | 先确认作者与顺序，只把可见原文和行为当作事实 |
 | 微信、抖音、朋友圈信息分散 | 在同一人物范围内跨渠道检索历史，同时保持草稿与发送状态逐渠道隔离 |
+| 建议依赖近期公共信息 | 只在已绑定关系群按需搜索，先匿名化查询，再标注网页标题、链接和检索日期 |
 | 同时认识多个人 | 每个人独立建档，分别比较互惠、可靠性、吸引、价值观和现实可行性 |
 | 没有具体对象 | 从真实生活与可持续认识渠道开始，不要求虚构对象或设置脱单期限 |
 | 出现明确拒绝或危险信号 | 停止推进；在控制、跟踪、胁迫、诈骗或暴力场景优先处理安全 |
@@ -38,6 +39,7 @@ Wing-Dog 是一个面向真实关系场景的 AI 恋爱决策助手。它不会�
             ├── Feishu / Hermes：移动端入口与 owner 校验
             ├── MySQL：人物、渠道、事件和本人记忆的唯一权威源
             ├── Search：原文 + ngram + 有界增强的三分支检索
+            ├── Web：已绑定群内匿名化、只读、按需的公共信息搜索
             └── Projection：自动生成只读关系审阅文件
 ```
 
@@ -45,6 +47,7 @@ Wing-Dog 是一个面向真实关系场景的 AI 恋爱决策助手。它不会�
 - **关系记忆有边界**：每个关系人物独立，每个来源渠道独立；跨群只共享用户本人事实。
 - **状态不会混淆**：`received`、`sent`、`draft`、`background`、`analysis` 和 `correction` 分开保存。
 - **检索返回权威正文**：增强摘要只用于查找，不会被当作事实返回给模型。
+- **联网查询先匿名化**：只搜索必要的公共事实，返回标题、URL 和摘要；网页信息不会自动写入关系记忆。
 - **授权不经过模型转抄**：关系与个人记忆工具只使用 Hermes 服务端 session 状态，并回查 owner、群和当前人物绑定。
 - **失败关闭**：MySQL 不可用或人物绑定不明确时，不记录、不分析，也不退回通用猜测。
 - **只提供建议**：不会自动替用户向微信、抖音或任何外部联系人发送消息。
@@ -54,7 +57,7 @@ Wing-Dog 是一个面向真实关系场景的 AI 恋爱决策助手。它不会�
 仓库同时维护两个边界不同的运行面：
 
 1. **可分发 Codex Skill**：`SKILL.md`、`agents/`、`references/` 和 `tests/` 提供行为规则、按需知识与场景验证。它本身不带数据库、后台服务或外部消息写入。
-2. **本机 Hermes 私有运行时**：`runtime/` 与运维脚本接入飞书、Hermes Gateway 和 WSL/Docker MySQL，负责身份校验、人物绑定、持久化、检索和只读投影。
+2. **本机 Hermes 私有运行时**：`runtime/` 与运维脚本接入飞书、Hermes Gateway 和 WSL/Docker MySQL，负责身份校验、人物绑定、持久化、关系检索、受控公网搜索和只读投影。
 
 两者不能互相代替证据：代码存在不代表本机服务当前健康；单独安装 Skill 也不会自动获得飞书接入或关系持久化。详细结构见[架构说明](documentation/architecture.md)。
 
@@ -109,7 +112,13 @@ schema v5 使用 MySQL 8 `ngram` FULLTEXT，在单一人物绑定内融合三个
 2. 权威原文 ngram 全文检索；
 3. 摘要、概念、别名、实体和时间线索的增强文本检索。
 
-固定 RRF 排序后，系统重新从 MySQL 权威事件表读取正文，并带回 correction 闭包。默认最多返回 8 条事件；增强文本只负责定位，不作为事实输出。在线检索不依赖 Ollama、Milvus 或本地 embedding。
+固定 RRF 排序后，系统重新从 MySQL 权威事件表读取正文，并带回 correction 闭包。默认最多返回 8 条事件；增强文本只负责定位，不作为事实输出。关系历史检索不依赖 Ollama、Milvus 或本地 embedding。
+
+## 受控公网搜索
+
+Hermes plugin 1.7.0 只在已经绑定人物的 Wing-Dog 关系群暴露 `relationship_web_search`。工具先用服务端 session 回查 owner、群和当前 MySQL binding，再对最小查询做二次匿名化，最后经 Hermes provider registry 精确取得无需 API key 的 `ddgs` provider。它不会调用通用搜索入口，也不允许回退到其他 provider；DDGS 未注册或不可用时失败关闭。未绑定群只有 owner 本人记忆工具，不能联网。
+
+搜索最多返回 5 条标题、URL 和摘要，不抓取网页全文，不开放浏览器，也不保证稳定获得发布日期。回答必须把联网信息、MySQL 关系记忆和模型推断分开，并为联网信息标注标题、URL 和检索日期；网页标题、摘要或其他片段中的任何指令都只是不可信数据，绝不执行。结果只存在于当前 Hermes 会话，不会自动写入事件、快照、草稿、本人记忆或 Markdown 投影；匿名化拒绝、超时或服务异常时会明确降级。
 
 ## 项目结构
 
@@ -139,7 +148,7 @@ python scripts\validate_skill.py
 python -m unittest discover -s runtime\tests -v
 ```
 
-第一条验证 Skill 的结构、预算、链接和运行时边界；第二条覆盖插件、数据规则、检索、导出、路由和 bootstrap 的隔离测试。它们不能证明真实 MySQL、Hermes、飞书、计划任务或远程模型当前健康。
+第一条验证 Skill 的结构、预算、链接和运行时边界；第二条覆盖插件、数据规则、关系检索、受控公网搜索、导出、路由和 bootstrap 的隔离测试。它们不能证明真实 MySQL、Hermes、DDGS、飞书、计划任务或远程模型当前健康。
 
 进一步阅读：[产品定位](documentation/product.md) · [架构说明](documentation/architecture.md) · [端到端记忆、上下文与路由](documentation/memory-context-routing.md) · [关键流程](documentation/flows.md) · [变量与秘密](documentation/variables.md) · [权限边界](documentation/permissions.md) · [测试地图](documentation/tests.md)
 

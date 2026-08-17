@@ -208,6 +208,25 @@ if ($LASTEXITCODE -ne 0) { throw 'Legacy relationship import failed' }
 $import = $importRaw | ConvertFrom-Json
 if ($import.sha256 -ne $expectedSha) { throw 'Legacy import SHA256 mismatch' }
 
+Write-Step 'Installing the keyless DDGS search provider through Hermes'
+$HermesInstallTemp = Join-Path $env:LOCALAPPDATA 'Temp'
+if (-not (Test-Path -LiteralPath $HermesInstallTemp -PathType Container)) {
+    throw "Hermes installation temp directory not found: $HermesInstallTemp"
+}
+$env:TEMP = $HermesInstallTemp
+$env:TMP = $HermesInstallTemp
+$ddgsExitCode = 1
+Push-Location $AgentRoot
+try {
+    & $Python -m hermes_cli.main tools post-setup ddgs
+    $ddgsExitCode = $LASTEXITCODE
+} finally {
+    Pop-Location
+}
+if ($ddgsExitCode -ne 0) { throw 'Hermes DDGS provider installation failed' }
+& $Python -c 'import ddgs'
+if ($LASTEXITCODE -ne 0) { throw 'Hermes DDGS provider installation did not produce an importable package' }
+
 Write-Step 'Deploying the restricted Hermes plugin and profile'
 & $Python $Bootstrap install-plugin --plugin-source (Join-Path $RuntimeRoot 'goutoujunshi') --target-home $HermesHome
 if ($LASTEXITCODE -ne 0) { throw 'Hermes plugin deployment failed' }
@@ -242,7 +261,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Imported relationship validation failed' }
 $stats = $statsRaw | ConvertFrom-Json
 if ($stats.import.sha256 -ne $expectedSha -or $stats.events -lt $import.events) { throw 'Imported event validation mismatch' }
 
-& $Python $Bootstrap verify --config $ConfigFile --profile-config (Join-Path $ProfileHome 'config.yaml') --env $EnvFile
+& $Python $Bootstrap verify --config $ConfigFile --profile-config (Join-Path $ProfileHome 'config.yaml') --profile-env (Join-Path $ProfileHome '.env') --env $EnvFile
 if ($LASTEXITCODE -ne 0) { throw 'Hermes GPT/profile verification failed' }
 
 Write-Step 'Replacing the duplicate Startup entry with one scheduled supervisor'

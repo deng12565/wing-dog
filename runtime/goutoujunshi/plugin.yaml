@@ -1,6 +1,6 @@
 name: goutoujunshi
-version: 1.6.1
-description: "Fail-closed Feishu adviser with isolated MySQL relationship memory and enriched MySQL retrieval."
+version: 1.7.0
+description: "Fail-closed Feishu adviser with isolated MySQL relationship memory and privacy-bounded web search."
 author: local
 kind: standalone
 requires_env:
@@ -9,6 +9,7 @@ requires_env:
 provides_tools:
   - relationship_commit_turn
   - relationship_search_events
+  - relationship_web_search
   - user_memory_remember
   - user_memory_correct
   - user_memory_forget

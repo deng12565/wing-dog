@@ -37,6 +37,20 @@ LEGACY_VECTOR_ENV_KEYS = {
 CODEX_USER_AGENT = "codex_cli_rs/0.0.0"
 USER_TOOLSET = "goutoujunshi-user"
 RELATIONSHIP_TOOLSET = "goutoujunshi"
+PROJECT_PLUGIN_TOOLSETS = [RELATIONSHIP_TOOLSET, USER_TOOLSET]
+FEISHU_RECOVERED_TOOLSETS = ["feishu_doc", "feishu_drive", "kanban"]
+PROFILE_DISABLED_TOOLSETS = [
+    "terminal",
+    "file",
+    "web",
+    "browser",
+    "delegation",
+    "memory",
+    "cron",
+    "mcp",
+    "computer",
+    *FEISHU_RECOVERED_TOOLSETS,
+]
 SKILL_NAME = "goutoujunshi"
 SKILL_RUNTIME_ENTRIES = ("SKILL.md", "agents", "references", "scripts", "assets")
 PLUGIN_NAME = "goutoujunshi"
@@ -640,6 +654,43 @@ def _configure_gateway_display(config: dict[str, Any]) -> None:
     feishu["busy_ack_detail"] = False
 
 
+def _configure_known_plugin_toolsets(config: dict[str, Any]) -> list[str]:
+    known_map = config.get("known_plugin_toolsets")
+    if not isinstance(known_map, dict):
+        known_map = {}
+        config["known_plugin_toolsets"] = known_map
+    existing = known_map.get("feishu")
+    known = {str(item) for item in existing} if isinstance(existing, list) else set()
+    known.update(PROJECT_PLUGIN_TOOLSETS)
+    known_map["feishu"] = sorted(known)
+    return known_map["feishu"]
+
+
+def _merge_disabled_toolsets(config: dict[str, Any], required: list[str]) -> list[str]:
+    agent = config.setdefault("agent", {})
+    existing = agent.get("disabled_toolsets")
+    merged = [str(item) for item in existing] if isinstance(existing, list) else []
+    for toolset in required:
+        if toolset not in merged:
+            merged.append(toolset)
+    agent["disabled_toolsets"] = merged
+    return merged
+
+
+def _resolved_hermes_toolsets(config: dict[str, Any], platform: str) -> list[str]:
+    from hermes_cli.tools_config import _get_platform_tools
+
+    return sorted(_get_platform_tools(config, platform))
+
+
+def _ddgs_importable() -> bool:
+    try:
+        import ddgs  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def command_configure_global(args: argparse.Namespace) -> None:
     path = Path(args.config)
     values = load_dotenv(Path(args.source_env))
@@ -652,12 +703,14 @@ def command_configure_global(args: argparse.Namespace) -> None:
     if "goutoujunshi" not in enabled:
         enabled.append("goutoujunshi")
     plugins["enabled"] = enabled
+    plugins["disabled"] = [
+        str(item) for item in (plugins.get("disabled") or []) if str(item) != PLUGIN_NAME
+    ]
     platform_toolsets = config.setdefault("platform_toolsets", {})
-    feishu_toolsets = list(platform_toolsets.get("feishu") or [])
-    for toolset in ("hermes-feishu", USER_TOOLSET):
-        if toolset not in feishu_toolsets:
-            feishu_toolsets.append(toolset)
+    feishu_toolsets = [USER_TOOLSET]
     platform_toolsets["feishu"] = feishu_toolsets
+    known_plugin_toolsets = _configure_known_plugin_toolsets(config)
+    disabled_toolsets = _merge_disabled_toolsets(config, FEISHU_RECOVERED_TOOLSETS)
     feishu = config.setdefault("platforms", {}).setdefault("feishu", {})
     feishu["enabled"] = True
     feishu["require_mention"] = False
@@ -679,6 +732,8 @@ def command_configure_global(args: argparse.Namespace) -> None:
             "fallback_count": 0,
             "require_mention": False,
             "feishu_toolsets": feishu_toolsets,
+            "known_plugin_toolsets": known_plugin_toolsets,
+            "disabled_toolsets": disabled_toolsets,
         }
     )
 
@@ -694,15 +749,19 @@ def command_configure_profile(args: argparse.Namespace) -> None:
     _configure_vision(config, global_values)
     _configure_compression(config)
     agent = config.setdefault("agent", {})
-    agent["disabled_toolsets"] = [
-        "terminal", "file", "web", "browser", "delegation", "memory", "cron", "mcp", "computer"
-    ]
-    config["memory"] = {"enabled": False}
+    agent["disabled_toolsets"] = list(PROFILE_DISABLED_TOOLSETS)
+    config.setdefault("memory", {})["enabled"] = False
     config.setdefault("tools", {})["tool_search"] = False
+    config.setdefault("web", {})["search_backend"] = "ddgs"
     profile_toolsets = [RELATIONSHIP_TOOLSET, USER_TOOLSET]
-    config["platform_toolsets"] = {"feishu": profile_toolsets}
-    config["platforms"] = {"feishu": {"enabled": False}}
-    config["plugins"] = {"enabled": ["goutoujunshi"]}
+    config.setdefault("platform_toolsets", {})["feishu"] = profile_toolsets
+    _configure_known_plugin_toolsets(config)
+    config.setdefault("platforms", {}).setdefault("feishu", {})["enabled"] = False
+    plugins = config.setdefault("plugins", {})
+    plugins["enabled"] = [PLUGIN_NAME]
+    plugins["disabled"] = [
+        str(item) for item in (plugins.get("disabled") or []) if str(item) != PLUGIN_NAME
+    ]
     _atomic_yaml(config_path, config)
 
     allowed_keys = {
@@ -720,10 +779,22 @@ def command_configure_profile(args: argparse.Namespace) -> None:
     }
     update_dotenv(
         profile_home / ".env",
-        {key: global_values[key] for key in allowed_keys if key in global_values},
+        {
+            **{key: global_values[key] for key in allowed_keys if key in global_values},
+            "WEB_TOOLS_DEBUG": "false",
+        },
         removals=LEGACY_VECTOR_ENV_KEYS,
     )
-    emit({"ok": True, "profile": "goutoujunshi", "toolsets": profile_toolsets, "memory": False})
+    emit(
+        {
+            "ok": True,
+            "profile": "goutoujunshi",
+            "toolsets": profile_toolsets,
+            "memory": False,
+            "search_backend": "ddgs",
+            "web_tools_debug": False,
+        }
+    )
 
 
 def command_configure_vision(args: argparse.Namespace) -> None:
@@ -746,12 +817,19 @@ def command_verify(args: argparse.Namespace) -> None:
     global_config = yaml.safe_load(Path(args.config).read_text(encoding="utf-8")) or {}
     profile_config = yaml.safe_load(Path(args.profile_config).read_text(encoding="utf-8")) or {}
     expected_values = load_dotenv(Path(args.env))
+    profile_env_path = Path(
+        getattr(args, "profile_env", None) or Path(args.profile_config).with_name(".env")
+    )
+    profile_values = load_dotenv(profile_env_path)
     expected_model = expected_values["GOUTOUJUNSHI_MODEL"]
     expected_reasoning = expected_values["GOUTOUJUNSHI_REASONING"]
     expected_base_url = expected_values["GOUTOUJUNSHI_OPENAI_BASE_URL"].rstrip("/")
     global_feishu = global_config.get("platforms", {}).get("feishu", {})
     global_feishu_extra = global_feishu.get("extra", {}) if isinstance(global_feishu, dict) else {}
     global_toolsets = global_config.get("platform_toolsets", {}).get("feishu") or []
+    global_resolved_toolsets = _resolved_hermes_toolsets(global_config, "feishu")
+    profile_resolved_toolsets = _resolved_hermes_toolsets(profile_config, "feishu")
+    ddgs_importable = _ddgs_importable()
     result = {
         "ok": True,
         "global": {
@@ -764,6 +842,13 @@ def command_verify(args: argparse.Namespace) -> None:
                 global_config.get("providers", {}).get(CODEX_ROUTE, {}).get("extra_headers", {}).get("User-Agent")
             ),
             "feishu_toolsets": global_toolsets,
+            "resolved_feishu_toolsets": global_resolved_toolsets,
+            "known_plugin_toolsets": (
+                global_config.get("known_plugin_toolsets", {}).get("feishu") or []
+            ),
+            "disabled_toolsets": global_config.get("agent", {}).get("disabled_toolsets") or [],
+            "plugins_enabled": global_config.get("plugins", {}).get("enabled") or [],
+            "plugins_disabled": global_config.get("plugins", {}).get("disabled") or [],
             "require_mention": global_feishu.get("require_mention"),
             "adapter_require_mention": global_feishu_extra.get("require_mention"),
             "group_policy": global_feishu_extra.get("group_policy"),
@@ -774,14 +859,24 @@ def command_verify(args: argparse.Namespace) -> None:
             "model": profile_config.get("model", {}).get("default"),
             "reasoning": profile_config.get("agent", {}).get("reasoning_effort"),
             "feishu_toolsets": profile_config.get("platform_toolsets", {}).get("feishu"),
+            "resolved_feishu_toolsets": profile_resolved_toolsets,
+            "known_plugin_toolsets": (
+                profile_config.get("known_plugin_toolsets", {}).get("feishu") or []
+            ),
             "memory_enabled": profile_config.get("memory", {}).get("enabled"),
             "feishu_adapter_enabled": profile_config.get("platforms", {}).get("feishu", {}).get("enabled"),
             "vision_provider": profile_config.get("auxiliary", {}).get("vision", {}).get("provider"),
             "vision_model": profile_config.get("auxiliary", {}).get("vision", {}).get("model"),
             "vision_api_mode": profile_config.get("auxiliary", {}).get("vision", {}).get("api_mode"),
+            "disabled_toolsets": profile_config.get("agent", {}).get("disabled_toolsets") or [],
             "skill_view_enabled": "skills"
             not in (profile_config.get("agent", {}).get("disabled_toolsets") or []),
             "tool_search_enabled": profile_config.get("tools", {}).get("tool_search"),
+            "search_backend": profile_config.get("web", {}).get("search_backend"),
+            "ddgs_importable": ddgs_importable,
+            "web_tools_debug": profile_values.get("WEB_TOOLS_DEBUG"),
+            "plugins_enabled": profile_config.get("plugins", {}).get("enabled") or [],
+            "plugins_disabled": profile_config.get("plugins", {}).get("disabled") or [],
             "compression": profile_config.get("compression", {}),
         },
         "deepseek_automatic": str(global_config.get("model", {}).get("provider", "")).lower() == "deepseek"
@@ -794,20 +889,42 @@ def command_verify(args: argparse.Namespace) -> None:
         and result["global"]["base_url_matches_codex"]
         and result["global"]["fallback_count"] == 0
         and result["global"]["codex_route_header"] == CODEX_USER_AGENT
-        and "hermes-feishu" in result["global"]["feishu_toolsets"]
-        and USER_TOOLSET in result["global"]["feishu_toolsets"]
+        and result["global"]["feishu_toolsets"] == [USER_TOOLSET]
+        and result["global"]["resolved_feishu_toolsets"] == [USER_TOOLSET]
+        and all(
+            toolset in result["global"]["known_plugin_toolsets"]
+            for toolset in PROJECT_PLUGIN_TOOLSETS
+        )
+        and all(
+            toolset in result["global"]["disabled_toolsets"]
+            for toolset in FEISHU_RECOVERED_TOOLSETS
+        )
+        and PLUGIN_NAME in result["global"]["plugins_enabled"]
+        and PLUGIN_NAME not in result["global"]["plugins_disabled"]
         and result["global"]["require_mention"] is False
         and result["global"]["adapter_require_mention"] is False
         and result["global"]["group_policy"] == "allowlist"
         and result["global"]["default_group_policy"] == "allowlist"
         and result["profile"]["feishu_toolsets"] == [RELATIONSHIP_TOOLSET, USER_TOOLSET]
+        and result["profile"]["resolved_feishu_toolsets"]
+        == sorted([RELATIONSHIP_TOOLSET, USER_TOOLSET])
+        and all(
+            toolset in result["profile"]["known_plugin_toolsets"]
+            for toolset in PROJECT_PLUGIN_TOOLSETS
+        )
         and result["profile"]["memory_enabled"] is False
         and result["profile"]["feishu_adapter_enabled"] is False
         and result["profile"]["vision_provider"] == CODEX_ROUTE
         and result["profile"]["vision_model"] == expected_model
         and result["profile"]["vision_api_mode"] == "codex_responses"
+        and result["profile"]["disabled_toolsets"] == PROFILE_DISABLED_TOOLSETS
         and result["profile"]["skill_view_enabled"]
         and result["profile"]["tool_search_enabled"] is False
+        and result["profile"]["search_backend"] == "ddgs"
+        and result["profile"]["ddgs_importable"] is True
+        and str(result["profile"]["web_tools_debug"]).lower() == "false"
+        and result["profile"]["plugins_enabled"] == [PLUGIN_NAME]
+        and PLUGIN_NAME not in result["profile"]["plugins_disabled"]
         and all(
             cfg.get("threshold_tokens") == 64000
             and cfg.get("proactive_prune_tokens") == 48000
@@ -864,6 +981,7 @@ def parser() -> argparse.ArgumentParser:
     verify = commands.add_parser("verify")
     verify.add_argument("--config", required=True)
     verify.add_argument("--profile-config", required=True)
+    verify.add_argument("--profile-env")
     verify.add_argument("--env", required=True)
     verify.set_defaults(func=command_verify)
     return root
