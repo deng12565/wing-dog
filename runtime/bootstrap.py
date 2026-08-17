@@ -426,7 +426,6 @@ def command_prepare_secrets(args: argparse.Namespace) -> None:
         "GOUTOUJUNSHI_DB_NAME": "goutoujunshi",
         "GOUTOUJUNSHI_DB_USER": "goutoujunshi_app",
         "GOUTOUJUNSHI_DB_PASSWORD": existing.get("GOUTOUJUNSHI_DB_PASSWORD") or secrets.token_urlsafe(36),
-        "GOUTOUJUNSHI_TOKEN_SECRET": existing.get("GOUTOUJUNSHI_TOKEN_SECRET") or secrets.token_urlsafe(48),
         "GOUTOUJUNSHI_EXPORT_ROOT": str(Path(args.export_root).resolve()).replace("\\", "/"),
         "GOUTOUJUNSHI_OPENAI_BASE_URL": base_url,
         "GOUTOUJUNSHI_MODEL": TARGET_MODEL,
@@ -699,6 +698,7 @@ def command_configure_profile(args: argparse.Namespace) -> None:
         "terminal", "file", "web", "browser", "delegation", "memory", "cron", "mcp", "computer"
     ]
     config["memory"] = {"enabled": False}
+    config.setdefault("tools", {})["tool_search"] = False
     profile_toolsets = [RELATIONSHIP_TOOLSET, USER_TOOLSET]
     config["platform_toolsets"] = {"feishu": profile_toolsets}
     config["platforms"] = {"feishu": {"enabled": False}}
@@ -713,7 +713,6 @@ def command_configure_profile(args: argparse.Namespace) -> None:
         "GOUTOUJUNSHI_DB_NAME",
         "GOUTOUJUNSHI_DB_USER",
         "GOUTOUJUNSHI_DB_PASSWORD",
-        "GOUTOUJUNSHI_TOKEN_SECRET",
         "GOUTOUJUNSHI_EXPORT_ROOT",
         "GOUTOUJUNSHI_OPENAI_BASE_URL",
         "GOUTOUJUNSHI_MODEL",
@@ -782,6 +781,7 @@ def command_verify(args: argparse.Namespace) -> None:
             "vision_api_mode": profile_config.get("auxiliary", {}).get("vision", {}).get("api_mode"),
             "skill_view_enabled": "skills"
             not in (profile_config.get("agent", {}).get("disabled_toolsets") or []),
+            "tool_search_enabled": profile_config.get("tools", {}).get("tool_search"),
             "compression": profile_config.get("compression", {}),
         },
         "deepseek_automatic": str(global_config.get("model", {}).get("provider", "")).lower() == "deepseek"
@@ -807,6 +807,7 @@ def command_verify(args: argparse.Namespace) -> None:
         and result["profile"]["vision_model"] == expected_model
         and result["profile"]["vision_api_mode"] == "codex_responses"
         and result["profile"]["skill_view_enabled"]
+        and result["profile"]["tool_search_enabled"] is False
         and all(
             cfg.get("threshold_tokens") == 64000
             and cfg.get("proactive_prune_tokens") == 48000

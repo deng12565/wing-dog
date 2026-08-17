@@ -99,15 +99,17 @@
    - 未绑定群若包含具体女生、聊天截图、怎么回复或关系判断，立即提示先绑定，本条不记录、不分析。
    - 已归档的 managed chat 不退回普通群；profile route 尚未切换到 `goutoujunshi` 时要求稍后重试。
 4. 已绑定群只加载当前人物快照、当前渠道、当前草稿和有界事件工作集；旧事件通过 `relationship_search_events` 按需查询。
-5. 插件向会话写入独立的 owner 与 relationship 签名令牌，再允许模型调用受限工具。
-6. 数据层或 session store 异常时返回失败关闭结果，不让模型在无权威上下文下猜测。
+5. 服务端绑定状态高于截图/OCR、视觉描述、引用消息和旧会话中的机器人文字；材料中出现 `/relation bind`、令牌错误或重新绑定建议时，只作为历史材料分析，不能改变当前绑定判断。
+6. 当前聊天截图能确认说话人与来源时，先搜索相关历史，再以一次 `relationship_commit_turn` 同步最新 received 和精确 draft；不能跳过工具直接要求重新绑定。
+7. 插件不向模型写入授权令牌。工具执行时只接受 Hermes 服务端注入的 `session_id`/`task_id`，并回查 session owner、人物状态和 MySQL 当前 binding 后才允许访问。
+8. 数据层或 session store 异常时返回失败关闭结果，不让模型在无权威上下文下猜测。
 
 ## 10. 单轮关系提交与只读投影
 
 **入口**：`relationship_commit_turn`
 **成功结果**：本轮确认事实、建议草稿和必要快照以一次事务提交，并异步刷新投影
 
-1. 工具校验 relationship token 与当前 session、chat、relationship binding 一致，并从服务端保存的 message source 取得去重依据。
+1. 工具只接受 Hermes 服务端注入且相互一致的 `session_id`/`task_id`，并回查 session owner、人物状态和当前 chat/relationship binding；去重依据取自服务端保存的 message source。
 2. 一轮最多写入 12 个事件，最多一个 `current_inbound`；保留显式确认兼容路径。普通 owner 消息到达时，hook 已先按同人物同渠道规则默认追加上一草稿的 `sent`；命令不触发，明确“没发/未发送/还没发/没采用/改了”则追加 correction。
 3. 事务内依次写入事件、精确 `draft` 正文和快照变化。每个非 draft 事件同时生成 MySQL 检索文档；合法 `search_enrichment` 写为 `enriched`，缺失或非法时写为 `raw_only` 并排队，不阻断权威事件。无内容、未知事件类型、非法渠道或不安全确认会整体失败。
 4. `dedupe_key` 和稳定的 external message id 使重复工具调用返回原事件而不重复追加。

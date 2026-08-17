@@ -4,7 +4,7 @@
 
 可分发 Codex Skill 不要求环境变量或 API key。Hermes 私有运行时需要宿主保护的 `.env`、Hermes YAML 和 Codex provider 信息。真实值不得进入仓库、日志、示例或 Git 历史。
 
-`runtime/goutoujunshi/plugin.yaml` 只声明插件启动必须的 `GOUTOUJUNSHI_DB_PASSWORD`、`GOUTOUJUNSHI_OWNER_ID`、`GOUTOUJUNSHI_TOKEN_SECRET`。其余变量由安装脚本配置。
+`runtime/goutoujunshi/plugin.yaml` 只声明插件启动必须的 `GOUTOUJUNSHI_DB_PASSWORD` 和 `GOUTOUJUNSHI_OWNER_ID`。其余变量由安装脚本配置。
 
 ## Runtime 变量
 
@@ -17,7 +17,6 @@
 | `GOUTOUJUNSHI_DB_HOST` / `PORT` | 权威 MySQL 地址 | `127.0.0.1` / `3306` | 连接失败 |
 | `GOUTOUJUNSHI_DB_NAME` | 权威数据库名 | `goutoujunshi` | 选错数据库 |
 | `GOUTOUJUNSHI_DB_USER` / `PASSWORD` | 最小权限数据库凭据 | `goutoujunshi_app` / 受保护随机值 | 数据层拒绝连接 |
-| `GOUTOUJUNSHI_TOKEN_SECRET` | session-bound HMAC 签名 | 受保护随机值，至少 32 字符 | 工具 token 无法签发 |
 | `GOUTOUJUNSHI_EXPORT_ROOT` | 只读关系投影目录 | `.local/relationships` | exporter 使用 cwd 默认值 |
 | `GOUTOUJUNSHI_OPENAI_BASE_URL` | Responses-compatible 主模型地址 | 从 Codex provider 派生 | 聊天/补强/预检失败 |
 | `GOUTOUJUNSHI_MODEL` | 当前远程主模型 | 安装目标 | 聊天/补强失败 |
@@ -33,7 +32,7 @@
 
 ## 配置文件
 
-- `runtime/goutoujunshi/plugin.yaml`: v1.5.0 插件接口、工具与 hooks，无秘密值。
+- `runtime/goutoujunshi/plugin.yaml`: v1.6.1 插件接口、工具与 hooks，无秘密值。
 - Hermes global/profile `config.yaml`: host-managed provider、toolset、route、compression 与 Feishu adapter 配置，不在仓库中。
 - `runtime/goutoujunshi/schema.sql`: schema v5，新增两个 MySQL 检索/任务表和 ngram FULLTEXT，无密码。
 - `scripts/wsl/Manage-Goutoujunshi-MySql.sh`: 面向仓库外的 WSL Docker MySQL；调用具有副作用。
@@ -41,6 +40,8 @@
 ## Secret 处理与发布检查
 
 - 不回显 `.env`、auth、token、密码、cookie、私钥、session 或人物标识。
+- v1.6.0 起不再生成或使用 `GOUTOUJUNSHI_TOKEN_SECRET`；升级时保留现有 `.env` 中的旧值，避免无关配置改写，但该值不参与授权。
+- 关系 profile 固定 `tools.tool_search: false`，保证受控关系工具直接可见；该值不是环境变量，也不影响默认 profile。
 - `.local/`、`.env*`、dump、backup、log、关系 handoff、import package 和投影不得进入 Git。
 - 安装、预检、schema、回填和 benchmark 可能读取凭据或访问外部系统，执行前需要明确授权。
 - commit 前检查准确 staged 路径，并扫描秘密赋值和私密关系材料。

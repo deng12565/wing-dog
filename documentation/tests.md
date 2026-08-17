@@ -19,8 +19,8 @@ python scripts\validate_skill.py --runtime
 
 | Module | Count | 主要合同 |
 | --- | ---: | --- |
-| `test_bootstrap.py` | 15 | host 配置、安装回滚、视觉补丁和静态核验 |
-| `test_plugin_surface.py` | 24 | owner/binding 失败关闭、token、prompt 缓存、tools/hooks、写入时增强 schema |
+| `test_bootstrap.py` | 16 | host 配置、安装回滚、plugin 1.6.1 清单、profile 工具可见性、视觉补丁和静态核验 |
+| `test_plugin_surface.py` | 27 | owner/binding/session 失败关闭、无模型 token schema、prompt 缓存、tools/hooks、写入时增强 schema |
 | `test_user_memory.py` | 6 | owner 隔离、append-only correction/forget、过期和敏感值拒绝 |
 | `test_repository_performance.py` | 5 | 上下文预算、幂等 turn commit、draft 确认、snapshot no-op |
 | `test_legacy_import.py` | 3 | legacy 分类、correction/draft 和渠道隔离 |
@@ -66,7 +66,15 @@ python -m unittest discover -s runtime\tests -p "test_*.py"
 - 生产 schema v5 首次与二次应用通过；409 个非 draft 文档/任务、157 个 draft 排除、两个 ngram FULLTEXT、旧表不存在、共享 `function_calls` 不变。
 - 历史补强最终为 409 done/enriched、0 pending/running/failed，409 个 source hash 全部匹配权威事件。
 - 10000 条/80 frozen 最终报告：语义 Recall@5 1.00、MRR@5 0.873、精确 Recall@5 1.00、correction Recall@1 1.00、SQL core P95 47.04ms、线上数据库路径 P95 168.86ms/max 185.52ms、事实覆盖 1.00、行动一致 0.975。
-- 已安装 plugin 1.5.0 的生产只读探针通过跨渠道、显式渠道、人物隔离、draft 默认隐藏/显式可见、`mysql_enriched`、内容预算和增强字段隐藏；独立不可达端口探针验证数据库失败关闭。计划任务 Running，Gateway/Feishu connected，text/image/function preflight 通过。
+- plugin 1.5.0 的历史生产只读探针曾通过跨渠道、显式渠道、人物隔离、draft 默认隐藏/显式可见、`mysql_enriched`、内容预算和增强字段隐藏；独立不可达端口探针验证数据库失败关闭。
+
+### 2026-08-13 仓库验收记录
+
+- 完整 runtime：84 项，82 通过，2 项专用 MySQL 测试按默认配置跳过。Skill 普通与 `--runtime` 校验、Python 编译和 `git diff --check` 通过。
+- plugin 1.6.0 的仓库测试覆盖服务端 session 授权、缺失 session、task/session 不一致、跨 owner、跨人物、归档 binding、session 清理、同轮 search-then-commit、旧 token 参数无影响，以及个人记忆当前 `source_ref` 隔离。
+- `test_bootstrap.py` 验证 plugin 1.6.1 清单、安装回滚、源目录与安装目录清单一致，以及关系 profile 固定关闭 `tools.tool_search`。
+- `test_plugin_surface.py` 验证服务端 binding 高于截图/OCR、引用消息和旧会话文本，并覆盖同 session 的 search-then-commit 与 session 清理。
+- 部署时仍须按“运行态验证边界”逐项核验；真实姓名、session 标识、binding 数量和当前服务状态只保留在本地 operator 记录，不进入公开仓库。
 
 ### 剩余边界
 

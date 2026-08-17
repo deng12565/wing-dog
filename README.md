@@ -45,6 +45,7 @@ Wing-Dog 是一个面向真实关系场景的 AI 恋爱决策助手。它不会�
 - **关系记忆有边界**：每个关系人物独立，每个来源渠道独立；跨群只共享用户本人事实。
 - **状态不会混淆**：`received`、`sent`、`draft`、`background`、`analysis` 和 `correction` 分开保存。
 - **检索返回权威正文**：增强摘要只用于查找，不会被当作事实返回给模型。
+- **授权不经过模型转抄**：关系与个人记忆工具只使用 Hermes 服务端 session 状态，并回查 owner、群和当前人物绑定。
 - **失败关闭**：MySQL 不可用或人物绑定不明确时，不记录、不分析，也不退回通用猜测。
 - **只提供建议**：不会自动替用户向微信、抖音或任何外部联系人发送消息。
 
@@ -140,7 +141,7 @@ python -m unittest discover -s runtime\tests -v
 
 第一条验证 Skill 的结构、预算、链接和运行时边界；第二条覆盖插件、数据规则、检索、导出、路由和 bootstrap 的隔离测试。它们不能证明真实 MySQL、Hermes、飞书、计划任务或远程模型当前健康。
 
-进一步阅读：[产品定位](documentation/product.md) · [架构说明](documentation/architecture.md) · [关键流程](documentation/flows.md) · [变量与秘密](documentation/variables.md) · [权限边界](documentation/permissions.md) · [测试地图](documentation/tests.md)
+进一步阅读：[产品定位](documentation/product.md) · [架构说明](documentation/architecture.md) · [端到端记忆、上下文与路由](documentation/memory-context-routing.md) · [关键流程](documentation/flows.md) · [变量与秘密](documentation/variables.md) · [权限边界](documentation/permissions.md) · [测试地图](documentation/tests.md)
 
 ## 设计原则
 

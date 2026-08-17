@@ -84,7 +84,9 @@ class BootstrapConfigTests(unittest.TestCase):
             profile_home = root / "profile"
             profile_home.mkdir()
             (profile_home / ".env").write_text(
-                "GOUTOUJUNSHI_MILVUS_MANAGED=true\nCUSTOM_PROFILE_VALUE=kept\n",
+                "GOUTOUJUNSHI_MILVUS_MANAGED=true\n"
+                "GOUTOUJUNSHI_TOKEN_SECRET=legacy-value-kept\n"
+                "CUSTOM_PROFILE_VALUE=kept\n",
                 encoding="utf-8",
             )
 
@@ -98,6 +100,7 @@ class BootstrapConfigTests(unittest.TestCase):
                 ["goutoujunshi", "goutoujunshi-user"],
             )
             self.assertFalse(config["memory"]["enabled"])
+            self.assertFalse(config["tools"]["tool_search"])
             self.assertNotIn("skills", config["agent"]["disabled_toolsets"])
             self.assertIn("file", config["agent"]["disabled_toolsets"])
             self.assertIn("terminal", config["agent"]["disabled_toolsets"])
@@ -106,6 +109,7 @@ class BootstrapConfigTests(unittest.TestCase):
             profile_values = bootstrap.load_dotenv(profile_home / ".env")
             self.assertNotIn("GOUTOUJUNSHI_OLLAMA_URL", profile_values)
             self.assertNotIn("GOUTOUJUNSHI_MILVUS_MANAGED", profile_values)
+            self.assertEqual(profile_values["GOUTOUJUNSHI_TOKEN_SECRET"], "legacy-value-kept")
             self.assertEqual(profile_values["CUSTOM_PROFILE_VALUE"], "kept")
 
     def test_skill_package_exactly_mirrors_runtime_allowlist(self) -> None:
@@ -156,6 +160,16 @@ class BootstrapConfigTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertEqual((target / "__init__.py").read_text(encoding="utf-8"), "VERSION = 2\n")
             self.assertFalse((target / "stale.txt").exists())
+
+    def test_plugin_manifest_uses_server_session_authorization(self) -> None:
+        manifest_path = Path(__file__).parents[1] / "goutoujunshi" / "plugin.yaml"
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(manifest["version"], "1.6.1")
+        self.assertNotIn(
+            "GOUTOUJUNSHI_TOKEN_SECRET",
+            manifest.get("requires_env", []),
+        )
 
     def test_plugin_install_restores_previous_directory_on_verification_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -365,6 +379,7 @@ class Runner:
             self.assertEqual(values["DEEPSEEK_API_KEY"], "optional-provider-secret")
             self.assertNotIn("GOUTOUJUNSHI_MILVUS_URL", values)
             self.assertNotIn("GOUTOUJUNSHI_SEMANTIC_SEARCH_ENABLED", values)
+            self.assertNotIn("GOUTOUJUNSHI_TOKEN_SECRET", values)
 
     def test_model_config_has_no_fallback(self) -> None:
         config = {

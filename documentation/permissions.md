@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | 用户/owner | 在自己的飞书军师群中提供信息、选择建议、维护绑定和记录 | 通过系统获取他人账号、位置或私密数据 |
 | Codex Skill | 读取行为与按需知识，在当前任务生成建议 | 自行持久化或自动发送外部消息 |
-| Hermes 插件 | 校验 owner/绑定，读写当前授权域的 MySQL | 跨 owner、人物、群、会话或渠道使用 token |
+| Hermes 插件 | 以 Hermes 服务端 session 校验 owner/绑定，读写当前授权域的 MySQL | 跨 owner、人物、群、会话或渠道访问 |
 | Supervisor/operator | 管理 MySQL、Gateway、路由、投影、媒体和备份；获准后执行迁移/回填/benchmark | 未授权外发历史正文、迁移数据、泄露凭据或扩大接入 |
 | 维护者 | 修改公开源码、文档和合成测试 | 访问或提交用户私有运行数据 |
 
@@ -14,7 +14,7 @@
 
 - `GOUTOUJUNSHI_OWNER_ID` 是 Feishu 入口 allowlist；非 owner 消息被跳过。
 - 一个活动关系群只解析一个 `chat_bindings` 和一个人物。未绑定群只能加载 owner 本人记忆；具体人物分析必须先绑定。
-- 关系 token 绑定 chat/relationship/session；个人记忆使用独立 owner/session token，两者不可互换。
+- 关系工具要求服务端 session 同时存在 owner 状态和人物 binding；个人记忆工具只使用该 session 的 owner 状态。`task_id` 与 `session_id` 同时存在时必须一致，模型参数不能提供或改变授权。
 - `relationship_events` 按人物和 `source_channels` 隔离；一个渠道的新消息不能确认另一渠道 draft。
 - 历史读取默认可跨同一人物渠道，但每个候选 ID 必须按当前 binding 回 MySQL 权威表 hydrate。检索文档本身不是授权凭证。
 - draft 只有在显式渠道下可检索，不进入补强表或批量回填。
@@ -36,6 +36,6 @@
 
 ## 宿主与部署边界
 
-仓库实现 HMAC、owner allowlist、受限 toolset、事务和路径约束，但最终权限仍依赖 Hermes、Feishu adapter、Windows ACL、WSL/Docker 和远程模型配置。安装、schema v5 迁移、历史补强、benchmark 与真实飞书冒烟都需要单独的运行授权；代码存在不构成运行态健康或授权证据。
+仓库实现 Hermes 服务端 session/owner/binding 校验、owner allowlist、受限 toolset、事务和路径约束，但最终权限仍依赖 Hermes、Feishu adapter、Windows ACL、WSL/Docker 和远程模型配置。安装、schema v5 迁移、历史补强、benchmark 与真实飞书冒烟都需要单独的运行授权；代码存在不构成运行态健康或授权证据。
 
 机器人只在军师群内回复 owner 和维护记录，不向微信、抖音或任何女性代发建议。

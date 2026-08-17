@@ -1,12 +1,11 @@
 name: goutoujunshi
-version: 1.5.0
+version: 1.6.1
 description: "Fail-closed Feishu adviser with isolated MySQL relationship memory and enriched MySQL retrieval."
 author: local
 kind: standalone
 requires_env:
   - GOUTOUJUNSHI_DB_PASSWORD
   - GOUTOUJUNSHI_OWNER_ID
-  - GOUTOUJUNSHI_TOKEN_SECRET
 provides_tools:
   - relationship_commit_turn
   - relationship_search_events

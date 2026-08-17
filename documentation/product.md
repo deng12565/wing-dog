@@ -61,8 +61,8 @@ Wing-Dog 不是替用户做主的“感情裁判”，而是同时处理情绪�
 | 项目 | 内容 |
 | --- | --- |
 | 状态 | 实现、生产迁移、历史补强和运行态发布完成 |
-| 版本 | schema v5 / plugin 1.5.0 |
-| 日期 | 2026-08-12 |
+| 版本 | schema v5 / plugin source 1.6.1 |
+| 日期 | 2026-08-13 |
 | 范围 | 私有 Hermes runtime；Codex Skill 分发面不新增持久化依赖 |
 
 ### 背景与问题
@@ -176,4 +176,4 @@ draft 不增强。correction 正常增强，但增强内容只能从该事件原
 - 2026-08-12 已在专用数据库通过空库与模拟 v4 的二次幂等迁移，并在生产库完成 schema v5 首次和二次应用：409 条非 draft 事件对应 409 个文档/任务，157 条 draft 未进入检索表，两个 ngram FULLTEXT 索引存在，共享 `function_calls` 指纹保持不变。
 - 409 条历史任务已全部补强为 `enriched/done`，权威 source hash 409/409 一致；其中 408 条一次成功，1 条模型遗漏经一次明确单条重试成功，无 pending/running/failed 或残留错误。
 - 10000 条合成检索与 80 条 frozen answer oracle 已通过：语义 Recall@5 100%、MRR@5 0.873、精确 Recall@5 100%、纠正闭包 Recall@1 100%、线上数据库路径 P95 168.86ms/max 185.52ms、关键事实覆盖 100%、行动方向一致 97.5%。
-- plugin 1.5.0 已发布到 Hermes；当前计划任务、Gateway 和 Feishu websocket 为运行/连接状态，远程 text/image/function preflight、owner 路由、人物/渠道/draft 隔离、输出边界及数据库失败关闭通过。生产历史的 14 条 correction 均无 `supersedes_event_id`，因此真实 correction closure 没有现成样本，证据来自专用 MySQL fixture 与自动测试；发布后真实用户消息往返仍由下一条飞书消息自然验证。
+- plugin 1.5.0 曾发布到 Hermes 并通过计划任务、Gateway、Feishu websocket、远程 text/image/function preflight、owner 路由、人物/渠道/draft 隔离、输出边界及数据库失败关闭验证。plugin 1.6.0 于 2026-08-13 部署服务端 session 授权后，真实截图暴露旧会话/截图机器人文字污染和关系工具被 `tool_search` 延迟披露的问题；plugin 1.6.1 已增加绑定信任优先级、让关系 profile 的受控工具直接可见，并在干净新会话下重新部署，仍待真实飞书 search-then-commit 写入验收。生产历史的 14 条 correction 均无 `supersedes_event_id`，因此真实 correction closure 没有现成样本，证据来自专用 MySQL fixture 与自动测试。

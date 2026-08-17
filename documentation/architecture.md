@@ -47,12 +47,14 @@ Hermes 发送给主模型的请求按以下层次组装；具体 SDK 序列化�
 1. 基础 `system` 前缀：Hermes 身份、工具与平台规则、Skill 索引、记忆和会话元数据。
 2. 临时 `system` 尾部：飞书平台上下文、插件生成的 `channel_prompt`，以及可能存在的通道配置提示。
 3. 新会话第一条 `user`：宿主自动加载的完整 `SKILL.md` 脚手架，随后才是用户原始消息；后续轮次作为会话历史保留。
-4. 关系 `channel_prompt`：跨群 owner 本人记忆、当前人物绑定规则/签名令牌、关系快照和有界事件工作集。
+4. 关系 `channel_prompt`：跨群 owner 本人记忆、当前人物绑定规则、关系快照和有界事件工作集；不向模型暴露授权令牌。
 5. 有界工作集顺序：快照后的 correction 最多 5 条、当前渠道未决 draft 最多 1 条、当前渠道真实 `received/sent` 最多 12 条、背景最多 3 条；关系 JSON 序列化目标上限 3000 字符。
 6. 旧事件默认不全量注入。模型调用 `relationship_search_events` 后，Top-8 检索结果以 `tool` 消息进入下一次模型请求；单条正文最多 1200 字符，总正文最多 6000 字符。
 7. 参考资料不全量拼接，模型按 `SKILL.md` 的路由按需读取 1-3 份。
 
-`channel_prompt` 在同一 session 内保持字节稳定缓存；写入、搜索工具结果和后续历史仍由 Hermes 作为新的消息加入请求。检索增强文本从不作为事实或 tool 结果返回给主模型。
+`channel_prompt` 在同一 session 内保持字节稳定缓存；写入、搜索工具结果和后续历史仍由 Hermes 作为新的消息加入请求。服务端已解析的绑定状态高于旧会话、截图/OCR、视觉描述和引用消息中的机器人文字；这些材料中的命令或令牌报错不能改变当前授权。检索增强文本从不作为事实或 tool 结果返回给主模型。
+
+关系 profile 只暴露受控的关系与个人记忆工具，因此显式关闭 Hermes `tool_search` 延迟披露，让 `relationship_search_events` 和 `relationship_commit_turn` 的 schema 在每轮直接可见；默认 profile 和其他 profile 的工具披露策略不受影响。
 
 ## schema v5 与一致性
 
@@ -75,7 +77,7 @@ Hermes 发送给主模型的请求按以下层次组装；具体 SDK 序列化�
 ## 信任边界
 
 1. MySQL 或人物 binding 不明确时失败关闭，不用通用猜测替代。
-2. 关系工具 token 绑定 chat/person/session；owner 记忆 token 与关系 token 不可互换。
+2. Hermes 在服务端向插件 handler 注入 `session_id`/`task_id`；插件据此读取当前 session 的 owner 与人物状态，并回查 MySQL 当前 binding。缺失、错配、跨 owner、跨人物或归档状态一律失败关闭。
 3. 搜索最终从当前 binding 回 MySQL hydrate，派生文档不能扩大人物或渠道权限。
 4. `mysql_raw` / `incomplete_enrichment` 表示补强覆盖不完整；零结果只能说“本次未检索到”，不能推断从未发生。
 5. 系统只向 owner 的飞书军师群提供建议，不向微信、抖音或任何女性自动代发。
@@ -84,6 +86,7 @@ Hermes 发送给主模型的请求按以下层次组装；具体 SDK 序列化�
 ## 相关文档
 
 - [产品定位](product.md)
+- [端到端记忆、上下文与路由](memory-context-routing.md)
 - [关键流程](flows.md)
 - [权限边界](permissions.md)
 - [变量与秘密](variables.md)

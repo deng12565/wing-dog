@@ -19,7 +19,9 @@
 - `relationship_search_events`：在当前人物内执行 MySQL 三分支检索，返回有界权威正文。
 - `user_memory_remember/correct/forget`：维护 owner-scoped append-only 本人事实。
 
-默认 Feishu toolsets 不暴露 terminal、任意文件读取或 web search。关系令牌与个人记忆令牌不能互换。
+默认 Feishu toolsets 不暴露 terminal、任意文件读取或 web search。关系与个人记忆工具都只接受 Hermes 服务端 session 授权，模型参数不能提供或扩大权限。
+
+`goutoujunshi` profile 设置 `tools.tool_search: false`，使该 profile 的 5 个受控插件工具直接可见，避免聊天截图轮因延迟披露而跳过搜索与提交。该设置不修改默认 Hermes profile。
 
 ## 后台 Supervisor
 
@@ -47,6 +49,6 @@ supervisor 不运行历史增强 worker，也不接触 Milvus/Ollama。循环重
 
 ## Prompt 引导与硬边界
 
-`SKILL.md` 的行为、安全和知识路由属于模型引导；owner allowlist、binding、签名 token、受限 toolset 和 MySQL 事务是更硬的运行边界。补强 prompt 要求只提取原文支持的检索路标，但增强仍是派生信息，所以永不作为权威事实返回。
+`SKILL.md` 的行为、安全和知识路由属于模型引导；owner allowlist、服务端 session/binding 校验、受限 toolset 和 MySQL 事务是更硬的运行边界。补强 prompt 要求只提取原文支持的检索路标，但增强仍是派生信息，所以永不作为权威事实返回。
 
 失败策略：资料不足保留未知；binding/route/database 异常时不分析、不记录；增强缺失不阻断权威事件，搜索标记 `incomplete_enrichment`；零结果不生成“从未发生”的否定事实。

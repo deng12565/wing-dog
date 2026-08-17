@@ -45,6 +45,7 @@ Relationship-advice Skill
 - **Bounded relationship memory** with independent people and channels; only owner facts are shared across groups.
 - **Explicit message state** separating `received`, `sent`, `draft`, `background`, `analysis`, and `correction`.
 - **Authoritative retrieval** where derived summaries help find events but are never returned as facts.
+- **Server-side authorization** where relationship and owner-memory tools use Hermes session state and recheck the owner, chat, and current person binding without model-copied tokens.
 - **Fail-closed behavior** when MySQL is unavailable or the active person binding is ambiguous.
 - **Advice only**: Wing-Dog never sends messages to WeChat, Douyin, or another external contact on the user's behalf.
 
