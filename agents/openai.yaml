@@ -1,4 +1,4 @@
 interface:
   display_name: "Wing-Dog"
-  short_description: "判断互动阶段与互惠，给出自然、有吸引力、能直接复制的首选回复"
-  default_prompt: "使用 $goutoujunshi 判断当前互动任务和节奏，直接给我一个自然、有吸引力、可复制的首选回复。"
+  short_description: "主动判断关系节奏，给出当前行动与下一节点"
+  default_prompt: "使用 $goutoujunshi 读取最新关系进展，主动判断当前目标，给我现在该做的动作、执行时机和下一节点。"

@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial-coral)](LICENSE)
 [![Codex Skill](https://img.shields.io/badge/Codex-Skill-0f766e)](SKILL.md)
 
-Wing-Dog 是一个面向真实关系场景的 AI 恋爱决策助手。即时聊天会在内部判断当前任务、吸引、双方投入和反馈，直接给出自然、有张力、可复制的首选回复；用户要求复盘或策略时，再展开事实、推测、互惠和下一步。
+Wing-Dog 是一个面向真实关系进展的 AI 恋爱谋士。用户只需提交新消息、截图或线下变化，它就会主动判断当前目标，给出眼下动作、可直接使用的内容、执行时机和下一节点；不需要用户逐项询问能否邀约、见面或推进。
 
 本项目是对 [powerycy/goutoujunshi](https://github.com/powerycy/goutoujunshi) 的改造与扩展，不是从零原创，也不代表上游作者参与或认可本分支。Wing-Dog 保留了上游的关系建议 Skill，并增加了 Hermes/飞书接入、MySQL 权威存储、人物与渠道隔离、多渠道检索、隐私受控的公网搜索、历史补强任务和本机运维能力。许可证及原作者 Required Notice 完整保留在 [LICENSE](LICENSE) 中。
 
@@ -18,9 +18,11 @@ Wing-Dog 是一个面向真实关系场景的 AI 恋爱决策助手。即时聊�
 
 | 真实场景 | Wing-Dog 的处理方式 |
 | --- | --- |
-| 不知道这句话怎么回 | 给一个首选方案、1–4 个自然气泡和发送节奏，不先展示分析 |
+| 只贴出一条新回复，没有提问 | 自动判断局势，给当前行动、执行时机和下一节点 |
+| 不知道这句话怎么回 | 给一个首选方案、1–4 个自然气泡，同时说明之后观察什么 |
 | 想“渣一点”或更会撩 | 用真实展示、轻调侃、推拉、筛选或投入测试增加张力，不因标签误拒绝 |
-| 想邀约或推进关系 | 判断当前阶段与互惠证据，给一个低压力、可退出的具体动作 |
+| 已出现邀约或升级窗口 | 主动提出当前最合适的动作，不等用户先问“能不能” |
+| 想了解见面时该做什么 | 区分泛泛了解、具体约会、临近见面、现场和复盘，不虚构安排 |
 | 对方忽冷忽热 | 区分节奏差异、暂时压力和持续失衡，设置观察信号与停止条件 |
 | 聊天截图很多、说话人复杂 | 先确认作者与顺序，只把可见原文和行为当作事实 |
 | 微信、抖音、朋友圈信息分散 | 在同一人物范围内跨渠道检索历史，同时保持草稿与发送状态逐渠道隔离 |
@@ -73,7 +75,7 @@ git clone https://github.com/deng12565/wing-dog.git ~/.codex/skills/wing-dog
 然后在 Codex 中输入：
 
 ```text
-使用 $goutoujunshi 判断当前互动任务和节奏，直接给我一个自然、有吸引力、可复制的首选回复。
+使用 $goutoujunshi 读取最新关系进展，主动判断当前目标，给我现在该做的动作、执行时机和下一节点。
 ```
 
 没有具体对象时，可以直接讲自己的生活、常见认识渠道、目标和障碍；有具体对象时，直接贴最新上下文或截图并说明来源。Wing-Dog 不发送固定问卷，只追问一个真正会改变建议的必要问题。
@@ -150,13 +152,13 @@ python -m unittest discover -s runtime\tests -v
 2. **顺其自然也要行动。** 该表达就表达，该邀约就邀约；对方不接时体面收住。
 3. **行为比标签可靠。** 不凭 MBTI、性别或一次聊天替目标对象读心。
 4. **互惠比追到更重要。** 减少内耗、保留尊严和未来选择权也是成功。
-5. **先给成品，再按需解释。** 即时回复不被理论淹没；完整策略分析再说明条件和关键权衡。
+5. **每次更新都给行动令。** 即使用户没有提问，也主动给当前动作、时机和下一节点；完整路线只在需要时展开。
 6. **同意和退出权不可绕过。** 明确拒绝不是需要破解的障碍。
 7. **危险情境先保安全。** 暴力、胁迫、跟踪、诈骗和自伤风险不能用普通恋爱话术处理。
 
 ## 来源、许可与贡献
 
-Wing-Dog 改造自 [powerycy/goutoujunshi](https://github.com/powerycy/goutoujunshi)，并吸收了 [hotcoffeeshake/tong-jincheng-skill](https://github.com/hotcoffeeshake/tong-jincheng-skill) 与 [Wike-CHI/mystery-perspective](https://github.com/Wike-CHI/mystery-perspective) 的部分经验框架。具体基线、版权和 MIT 许可见[第三方声明](references/THIRD_PARTY_NOTICES.md)。
+Wing-Dog 改造自 [powerycy/goutoujunshi](https://github.com/powerycy/goutoujunshi)，并将若干第三方研究材料转译为不依赖人物或流派名称的通用互动能力。具体来源、固定基线、许可和仅研究用途说明见[第三方声明](references/THIRD_PARTY_NOTICES.md)。
 
 项目继续采用 [PolyForm Noncommercial License 1.0.0](LICENSE)，并保留上游要求的声明：
 

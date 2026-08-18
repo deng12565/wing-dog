@@ -8,7 +8,7 @@
 
 ## Skill 与场景覆盖
 
-`scripts/validate_skill.py` 检查 frontmatter、知识/实用资料最低数量、SKILL 上下文预算、运行白名单、场景规范、第三方声明、Markdown 链接、占位符和编译产物。`tests/` 的七份人工/代理规范覆盖聊天材料、投入失衡、社交校准、即时话术、主动约会、经典社交框架和男性找女友全流程。
+`scripts/validate_skill.py` 检查 frontmatter、知识/实用资料最低数量、谋士循环与行动令标记、人物/固定模板回归、运行白名单、场景规范、第三方声明、Markdown 链接、占位符和编译产物。`tests/` 的七份人工/代理规范覆盖聊天材料、投入失衡、通用社交校准、即时行动令、动态见面路由、互动框架和男性找女友全流程。
 
 ```powershell
 python scripts\validate_skill.py

@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial-coral)](LICENSE)
 [![Codex Skill](https://img.shields.io/badge/Codex-Skill-0f766e)](SKILL.md)
 
-Wing-Dog is an AI relationship decision assistant built for real conversations and real constraints. Instead of reducing every situation to "be brave and chase" or "walk away now," it separates facts, inferences, and unknowns; weighs reciprocity, practical constraints, risk, opportunity cost, and long-term options; and ends with something usable: a message, an invitation, an observation signal, or a clear stop action.
+Wing-Dog is an AI relationship strategist built for real conversations and real constraints. The user can simply submit a new message, screenshot, or offline update; Wing-Dog then identifies the current objective and returns the action to take now, copy-ready content when needed, execution timing, and the next decision point.
 
 This project is an adaptation and extension of [powerycy/goutoujunshi](https://github.com/powerycy/goutoujunshi). It is not an original-from-scratch work, and it does not imply upstream participation or endorsement. Wing-Dog retains the upstream relationship-advice Skill while adding Hermes and Feishu integration, authoritative MySQL storage, person and channel isolation, cross-channel retrieval, privacy-bounded public web search, resumable enrichment jobs, and local operations. The upstream license and its Required Notice remain intact in [LICENSE](LICENSE).
 
@@ -18,8 +18,10 @@ This project is an adaptation and extension of [powerycy/goutoujunshi](https://g
 
 | Real situation | What Wing-Dog does |
 | --- | --- |
-| You do not know how to reply | Gives one copy-ready preferred reply first, then timing and response branches |
-| You want to invite someone or move forward | Checks the stage and reciprocity evidence, then proposes one low-pressure, reversible action |
+| You post a new reply without asking a question | Automatically gives the current action, timing, and next decision point |
+| You do not know how to reply | Gives one copy-ready preferred reply and says what to observe next |
+| An invitation or escalation window is ready | Proposes the appropriate move without waiting for the user to ask for permission |
+| You ask what to do when meeting | Distinguishes general learning, a scheduled date, an imminent meeting, live context, and review |
 | The other person is inconsistent | Separates pacing differences and temporary pressure from sustained imbalance, with observation and stop signals |
 | There are many screenshots or unclear speakers | Resolves authorship and sequence first, and treats only visible text and behavior as facts |
 | History is split across WeChat, Douyin, Moments, and offline contact | Searches across channels for the same person while keeping drafts and sent-state channel-specific |
@@ -72,20 +74,10 @@ git clone https://github.com/deng12565/wing-dog.git ~/.codex/skills/wing-dog
 Then ask Codex:
 
 ```text
-Use Wing-Dog ($goutoujunshi) to identify my current relationship stage and give me one natural action to move forward, observe, or stop.
+Use $goutoujunshi to read the latest relationship update and tell me the current objective, what to do now, when to do it, and what signal should trigger the next step.
 ```
 
-If there is no specific person, describe your real life, usual ways of meeting people, goal, and main obstacle. When someone is involved, you can provide:
-
-```text
-You: MBTI / subjective overall score 0-100 / main strengths and weaknesses
-Person, if any: alias / MBTI / subjective score 0-100 / current relationship
-History: how you met, timeline, key events, contact, and investment from both sides
-Goal: move forward, define, repair, compare, or exit
-Emotion: the hardest part, intensity 0-10, and whether a reply is urgent
-```
-
-Unknown fields can be left blank. Wing-Dog organizes what is known and asks only for information that could change the recommendation.
+If there is no specific person, describe your real life, usual ways of meeting people, goal, and main obstacle. When someone is involved, post the latest context or screenshot and identify the source when it is not visible. Wing-Dog does not require a questionnaire and asks at most one question that would materially change the action.
 
 > [!IMPORTANT]
 > Hermes, Feishu, and MySQL form a separate controlled deployment surface. They are not installed by cloning the Skill. Installation, startup, shutdown, migration, historical enrichment, and external preflight commands are side-effectful and require explicit review and authorization.
@@ -158,13 +150,13 @@ Further reading: [Product](documentation/product.md) · [Architecture](documenta
 2. **Letting things develop naturally still includes action.** Express, invite, and stop respectfully when the response is absent.
 3. **Behavior is stronger evidence than labels.** Do not mind-read from MBTI, gender, or a single exchange.
 4. **Reciprocity matters more than winning someone.** Less rumination, preserved dignity, and future options also count as success.
-5. **A strategy must disclose its cost.** Communication tactics need conditions, risks, and long-term tradeoffs.
+5. **Every update produces an order.** Even without a direct question, give the action to take now, its timing, and the next decision point; expand the full strategy only when needed.
 6. **Consent and the right to exit are non-negotiable.** A clear refusal is not an obstacle to bypass.
 7. **Safety comes first in dangerous situations.** Violence, coercion, stalking, fraud, and self-harm risk are not ordinary dating problems.
 
 ## Attribution, license, and contributions
 
-Wing-Dog is adapted from [powerycy/goutoujunshi](https://github.com/powerycy/goutoujunshi) and incorporates selected experience frameworks from [hotcoffeeshake/tong-jincheng-skill](https://github.com/hotcoffeeshake/tong-jincheng-skill). See [Third-Party Notices](references/THIRD_PARTY_NOTICES.md) for exact baselines, copyright, and the MIT license.
+Wing-Dog is adapted from [powerycy/goutoujunshi](https://github.com/powerycy/goutoujunshi) and translates selected third-party research into general interaction capabilities that do not depend on a named persona or mode. See [Third-Party Notices](references/THIRD_PARTY_NOTICES.md) for exact baselines, licenses, and research-only declarations.
 
 The project remains under the [PolyForm Noncommercial License 1.0.0](LICENSE) and preserves the upstream required notice:
 

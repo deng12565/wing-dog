@@ -33,6 +33,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## fangongzi research source
+
+- Source: <https://github.com/gaminiYJ/fangongzi>
+- Research baseline: `beb4315b7df564e221f7452bb85b23c4d03d47a0`
+- License: no license file was declared at the reviewed baseline
+
+This repository was used only to compare high-level topics such as authentic self-presentation, gradual interaction, contextual diagnosis, and feedback calibration. Wing-Dog does not copy upstream text, vendor its files, impersonate the named creator, or treat its claims as verified relationship science.
+
 ## mystery-perspective
 
 - Source: <https://github.com/Wike-CHI/mystery-perspective>

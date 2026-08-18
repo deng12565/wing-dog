@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ERRORS: list[str] = []
 MIN_KNOWLEDGE_DOCUMENTS = 20
-MIN_PRACTICAL_DOCUMENTS = 21
+MIN_PRACTICAL_DOCUMENTS = 22
 
 REQUIRED_KNOWLEDGE = (
     "01-证据分级与内容边界.md",
@@ -112,6 +112,9 @@ def validate_inventory(runtime_only: bool) -> None:
         notice_markers = (
             "hotcoffeeshake/tong-jincheng-skill",
             "30d6891783d889a164f0536f5cfdca009f307d01",
+            "gaminiYJ/fangongzi",
+            "beb4315b7df564e221f7452bb85b23c4d03d47a0",
+            "no license file was declared",
             "Wike-CHI/mystery-perspective",
             "bef2c7e4b71e0f62ee5fc0f8114f3e63ca3255c5",
             "MIT License",
@@ -132,18 +135,44 @@ def validate_routes_and_regressions(runtime_only: bool) -> None:
             "references/practical/自然流、内在状态与结构化互动：伦理能力转译.md",
             "references/practical/功夫聊天：关系、进攻、破防、假动作与引诱.md",
             "references/practical/从认识到确定关系：真诚、吸引与自然推进.md",
-            "默认只读取当前问题直接需要的 1–3 份参考",
+            "默认只读取当前任务直接需要的 1–3 份参考",
             "sender/member ID",
             "不得按左右、颜色、语气或性别猜",
-            "证据不足时优先选择一个能产生新信息的动作",
-            "高手决策引擎",
-            "Demonstrate, Don't State",
-            "Compliance Test／投入测试",
-            "失败时反向检查阶段、素材、表达和时机",
+            "默认谋士循环",
+            "即使用户没有问",
+            "**当前目标**",
+            "**现在做**",
+            "**执行时机**",
+            "**下一节点**",
+            "保存 `draft` 时只保存",
+            "见面问题路由",
+            "不等用户询问“能不能”",
         )
         for route in required_routes:
             if route not in content:
                 ERRORS.append(f"SKILL.md missing required progressive-disclosure route: {route}")
+
+    runtime_behavior_files = [ROOT / "SKILL.md", ROOT / "agents/openai.yaml"]
+    runtime_behavior_files.extend((ROOT / "references/practical").glob("*.md"))
+    forbidden_persona_markers = ("童锦程", "梵公子", "景辰", "深情祖师爷")
+    forbidden_template_markers = (
+        "常用话术库",
+        "话术演练模式",
+        "场景化应用",
+        "稳健版",
+        "会撩版",
+        "强势版",
+    )
+    for path in runtime_behavior_files:
+        if not path.is_file():
+            continue
+        content = path.read_text(encoding="utf-8")
+        for marker in (*forbidden_persona_markers, *forbidden_template_markers):
+            if marker in content:
+                ERRORS.append(
+                    f"runtime behavior material contains deprecated persona/template marker "
+                    f"{marker!r}: {path.relative_to(ROOT)}"
+                )
 
     scenarios = ROOT / "tests/classic-social-framework-scenarios.md"
     if runtime_only:
@@ -159,10 +188,10 @@ def validate_routes_and_regressions(runtime_only: bool) -> None:
             "明确拒绝",
             "煤气灯",
             "隔离",
-            "DHV",
-            "Neg",
+            "价值展示",
+            "轻调侃",
             "投入测试",
-            "Reverse Calibration",
+            "失败倒查",
         )
         for marker in coverage_markers:
             if marker not in content:
@@ -179,6 +208,7 @@ def validate_routes_and_regressions(runtime_only: bool) -> None:
             "sender/member ID",
             "未确认前只问一个必要问题",
             "不静默翻转说话人",
+            "截图本身触发行动令",
         )
         for marker in coverage_markers:
             if marker not in content:
@@ -197,7 +227,7 @@ def validate_routes_and_regressions(runtime_only: bool) -> None:
             "重复没有替代安排",
             "明确拒绝",
             "多位对象档案",
-            "点名童锦程",
+            "讨好过量时主动纠偏",
             "已经确认关系",
         )
         for marker in coverage_markers:
@@ -205,6 +235,28 @@ def validate_routes_and_regressions(runtime_only: bool) -> None:
                 ERRORS.append(
                     "male dating journey scenarios missing coverage: " f"{marker}"
                 )
+
+    tactical_scenarios = ROOT / "tests/tactical-reply-scenarios.md"
+    if tactical_scenarios.is_file():
+        content = tactical_scenarios.read_text(encoding="utf-8")
+        for marker in (
+            "默认给行动令与下一节点",
+            "只贴新消息也自动指挥",
+            "邀约确认后自动切换任务",
+        ):
+            if marker not in content:
+                ERRORS.append(f"tactical reply scenarios missing advisor coverage: {marker}")
+
+    active_scenarios = ROOT / "tests/active-dating-scenarios.md"
+    if active_scenarios.is_file():
+        content = active_scenarios.read_text(encoding="utf-8")
+        for marker in (
+            "泛泛了解见面不虚构安排",
+            "只有明确现场才给即时动作",
+            "见面结束自动转入后续",
+        ):
+            if marker not in content:
+                ERRORS.append(f"active dating scenarios missing meeting routing: {marker}")
 
 
 def validate_runtime_boundaries() -> None:
