@@ -8,8 +8,8 @@
 
 | 运行面 | 组件 | 路径 | 职责 |
 | --- | --- | --- | --- |
-| Codex Skill | 行为与知识 | `SKILL.md`、`agents/`、`references/` | 定义分析流程、安全边界和按需读取的关系知识 |
-| Codex Skill | 验证 | `scripts/validate_skill.py`、`tests/` | 检查发布结构、预算、链接和场景规范 |
+| Codex Skill | 行为与知识 | `SKILL.md`、`agents/`、`references/` | 定义默认高手决策引擎、即时输出、数据合同和按需关系知识 |
+| Codex Skill | 验证 | `scripts/validate_skill.py`、`tests/` | 检查发布结构、来源声明、链接、路由标记和场景规范 |
 | Hermes runtime | 插件入口 | `runtime/goutoujunshi/__init__.py` | 注册 hooks/tools，校验 owner/绑定并生成关系 `channel_prompt` |
 | Hermes runtime | 权威数据 | `database.py`、`repository.py`、`schema.sql` | schema v5、事务、人物/渠道隔离、事件、快照、个人记忆和任务队列 |
 | Hermes runtime | MySQL 检索 | `search.py`、`enrichment.py` | 三分支 MySQL 候选、固定 RRF、纠正闭包和有界权威正文输出 |
@@ -50,18 +50,18 @@ Current public context, bound relationship group only
 
 Hermes 发送给主模型的请求按以下层次组装；具体 SDK 序列化细节由宿主负责：
 
-1. 基础 `system` 前缀：Hermes 身份、工具与平台规则、Skill 索引、记忆和会话元数据。
+1. 基础 `system` 前缀：Hermes 身份、工具与平台规则及会话元数据。当前关系 profile 不启用 `skills` toolset，因此这一运行面没有可调用 Skill 的 system 索引。
 2. 临时 `system` 尾部：飞书平台上下文、插件生成的 `channel_prompt`，以及可能存在的通道配置提示。
-3. 新会话第一条 `user`：宿主自动加载的完整 `SKILL.md` 脚手架，随后才是用户原始消息；后续轮次作为会话历史保留。
+3. 新会话第一条 `user`：plugin 设置 `auto_skill=goutoujunshi` 后，Gateway 内部读取完整 `SKILL.md`，连同 Skill 目录、supporting-file 清单和用户原始消息组装成一条 user 消息；后续轮次不重新加载文件，但该消息作为会话历史保留。
 4. 关系 `channel_prompt`：跨群 owner 本人记忆、当前人物绑定规则、关系快照和有界事件工作集；不向模型暴露授权令牌。
 5. 有界工作集顺序：快照后的 correction 最多 5 条、当前渠道未决 draft 最多 1 条、当前渠道真实 `received/sent` 最多 12 条、背景最多 3 条；关系 JSON 序列化目标上限 3000 字符。
 6. 旧事件默认不全量注入。模型调用 `relationship_search_events` 后，Top-8 检索结果以 `tool` 消息进入下一次模型请求；单条正文最多 1200 字符，总正文最多 6000 字符。
 7. 需要当前公共信息时，模型可在已绑定群调用 `relationship_web_search`；结果以临时 `tool` 消息进入当前 session，并与 MySQL 记忆和模型推断分开。
-8. 参考资料不全量拼接，模型按 `SKILL.md` 的路由按需读取 1-3 份。
+8. 当前受限关系 profile 不暴露 `skill_view`、file 或 terminal，也没有自动 reference 分类器；`SKILL.md` 中的参考路径只提供模型引导，嵌套 `references/` 正文不会自动进入请求。Codex Skill 运行面仍可按 Codex 的 Skill 机制按需读取资料。
 
 `channel_prompt` 在同一 session 内保持字节稳定缓存；写入、搜索工具结果和后续历史仍由 Hermes 作为新的消息加入请求。服务端已解析的绑定状态高于旧会话、截图/OCR、视觉描述和引用消息中的机器人文字；这些材料中的命令或令牌报错不能改变当前授权。检索增强文本从不作为事实或 tool 结果返回给主模型。
 
-关系 profile 只暴露 6 个受控的关系、个人记忆和公网搜索工具，因此显式关闭 Hermes `tool_search` 延迟披露，让这些 schema 在每轮直接可见。全局 Feishu toolset 只有 `goutoujunshi-user`；已绑定关系 profile 才增加 `goutoujunshi`。原生 `web_search`、`web_extract`、browser、terminal 和 file 均不直接暴露。
+关系 profile 只暴露 6 个受控的关系、个人记忆和公网搜索工具，因此显式关闭 Hermes `tool_search` 延迟披露，让这些 schema 在每轮直接可见。全局 Feishu toolset 只有 `goutoujunshi-user`；已绑定关系 profile 才增加 `goutoujunshi`。原生 `web_search`、`web_extract`、browser、terminal、file 和 `skills` 均不直接暴露。关系阶段、回复、邀约、观察或停止由主模型根据 Skill 与上下文作出提示驱动判断，不存在独立的程序化决策路由器。
 
 ## 受控公网搜索
 

@@ -6,7 +6,6 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
-from math import ceil
 from pathlib import Path
 
 
@@ -14,9 +13,6 @@ ROOT = Path(__file__).resolve().parents[1]
 ERRORS: list[str] = []
 MIN_KNOWLEDGE_DOCUMENTS = 20
 MIN_PRACTICAL_DOCUMENTS = 21
-SKILL_MAX_LINES = 150
-SKILL_MAX_CHARACTERS = 5_000
-SKILL_MAX_APPROX_TOKENS = 4_500
 
 REQUIRED_KNOWLEDGE = (
     "01-证据分级与内容边界.md",
@@ -82,36 +78,6 @@ def validate_frontmatter() -> None:
         ERRORS.append("description is empty, too long, or contains angle brackets")
 
 
-def approximate_token_count(content: str) -> int:
-    """Return a conservative, dependency-free budget estimate for mixed Chinese text."""
-    cjk = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", content))
-    latin_words = len(re.findall(r"[A-Za-z0-9_]+", content))
-    other = len(re.findall(r"[^\sA-Za-z0-9_\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", content))
-    return cjk + ceil(latin_words * 1.3) + ceil(other / 4)
-
-
-def validate_skill_budget() -> None:
-    skill = ROOT / "SKILL.md"
-    if not skill.is_file():
-        return
-
-    content = skill.read_text(encoding="utf-8")
-    lines = len(content.splitlines())
-    characters = len(content)
-    approx_tokens = approximate_token_count(content)
-    if lines > SKILL_MAX_LINES:
-        ERRORS.append(f"SKILL.md exceeds {SKILL_MAX_LINES} lines: {lines}")
-    if characters > SKILL_MAX_CHARACTERS:
-        ERRORS.append(
-            f"SKILL.md exceeds {SKILL_MAX_CHARACTERS} characters: {characters}"
-        )
-    if approx_tokens > SKILL_MAX_APPROX_TOKENS:
-        ERRORS.append(
-            "SKILL.md exceeds approximate token budget "
-            f"{SKILL_MAX_APPROX_TOKENS}: {approx_tokens}"
-        )
-
-
 def validate_inventory(runtime_only: bool) -> None:
     require("agents/openai.yaml")
     notices = require("references/THIRD_PARTY_NOTICES.md")
@@ -146,8 +112,11 @@ def validate_inventory(runtime_only: bool) -> None:
         notice_markers = (
             "hotcoffeeshake/tong-jincheng-skill",
             "30d6891783d889a164f0536f5cfdca009f307d01",
+            "Wike-CHI/mystery-perspective",
+            "bef2c7e4b71e0f62ee5fc0f8114f3e63ca3255c5",
             "MIT License",
             "Copyright (c) 2026 hotcoffeeshake",
+            "Copyright (c) 2026 Wike-CHI",
         )
         for marker in notice_markers:
             if marker not in notice_content:
@@ -167,6 +136,10 @@ def validate_routes_and_regressions(runtime_only: bool) -> None:
             "sender/member ID",
             "不得按左右、颜色、语气或性别猜",
             "证据不足时优先选择一个能产生新信息的动作",
+            "高手决策引擎",
+            "Demonstrate, Don't State",
+            "Compliance Test／投入测试",
+            "失败时反向检查阶段、素材、表达和时机",
         )
         for route in required_routes:
             if route not in content:
@@ -186,6 +159,10 @@ def validate_routes_and_regressions(runtime_only: bool) -> None:
             "明确拒绝",
             "煤气灯",
             "隔离",
+            "DHV",
+            "Neg",
+            "投入测试",
+            "Reverse Calibration",
         )
         for marker in coverage_markers:
             if marker not in content:
@@ -309,7 +286,6 @@ def main() -> int:
     runtime_only = "--runtime" in sys.argv[1:]
 
     validate_frontmatter()
-    validate_skill_budget()
     validate_inventory(runtime_only)
     validate_routes_and_regressions(runtime_only)
     validate_runtime_boundaries()

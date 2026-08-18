@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial-coral)](LICENSE)
 [![Codex Skill](https://img.shields.io/badge/Codex-Skill-0f766e)](SKILL.md)
 
-Wing-Dog 是一个面向真实关系场景的 AI 恋爱决策助手。它不会只说“勇敢去追”或“赶紧放弃”，而是先区分事实、推测与未知，再综合互惠、现实条件、风险、机会成本和长期选择权，最后给出一句可发送的话、一次具体邀约、一个观察信号，或一个明确的停止动作。
+Wing-Dog 是一个面向真实关系场景的 AI 恋爱决策助手。即时聊天会在内部判断当前任务、吸引、双方投入和反馈，直接给出自然、有张力、可复制的首选回复；用户要求复盘或策略时，再展开事实、推测、互惠和下一步。
 
 本项目是对 [powerycy/goutoujunshi](https://github.com/powerycy/goutoujunshi) 的改造与扩展，不是从零原创，也不代表上游作者参与或认可本分支。Wing-Dog 保留了上游的关系建议 Skill，并增加了 Hermes/飞书接入、MySQL 权威存储、人物与渠道隔离、多渠道检索、隐私受控的公网搜索、历史补强任务和本机运维能力。许可证及原作者 Required Notice 完整保留在 [LICENSE](LICENSE) 中。
 
@@ -18,7 +18,8 @@ Wing-Dog 是一个面向真实关系场景的 AI 恋爱决策助手。它不会�
 
 | 真实场景 | Wing-Dog 的处理方式 |
 | --- | --- |
-| 不知道这句话怎么回 | 先给一条可直接复制的首选回复，再说明发送时机和后续分支 |
+| 不知道这句话怎么回 | 给一个首选方案、1–4 个自然气泡和发送节奏，不先展示分析 |
+| 想“渣一点”或更会撩 | 用真实展示、轻调侃、推拉、筛选或投入测试增加张力，不因标签误拒绝 |
 | 想邀约或推进关系 | 判断当前阶段与互惠证据，给一个低压力、可退出的具体动作 |
 | 对方忽冷忽热 | 区分节奏差异、暂时压力和持续失衡，设置观察信号与停止条件 |
 | 聊天截图很多、说话人复杂 | 先确认作者与顺序，只把可见原文和行为当作事实 |
@@ -72,20 +73,10 @@ git clone https://github.com/deng12565/wing-dog.git ~/.codex/skills/wing-dog
 然后在 Codex 中输入：
 
 ```text
-使用 Wing-Dog（$goutoujunshi）帮我判断当前恋爱阶段，并给一个自然的推进、观察或停止动作。
+使用 $goutoujunshi 判断当前互动任务和节奏，直接给我一个自然、有吸引力、可复制的首选回复。
 ```
 
-没有具体对象时，可以直接讲自己的生活、常见认识渠道、目标和障碍。出现具体对象后，可以提供：
-
-```text
-你：MBTI / 主观综合评分 0-100 / 主要优势和短板
-对象（如有）：代号 / MBTI / 主观综合评分 0-100 / 当前关系
-经过：认识方式、发展时间、关键事件、联系和双方投入
-目标：推进、确认、修复、比较选择，还是退出
-情绪：目前最难受的点、强度 0-10，以及是否必须马上回复
-```
-
-不知道的项目可以留空。Wing-Dog 会从叙述中整理已知信息，并只追问真正会改变建议的内容。
+没有具体对象时，可以直接讲自己的生活、常见认识渠道、目标和障碍；有具体对象时，直接贴最新上下文或截图并说明来源。Wing-Dog 不发送固定问卷，只追问一个真正会改变建议的必要问题。
 
 > [!IMPORTANT]
 > Hermes、飞书和 MySQL 是独立的受控部署面，不属于 `git clone` 即可完成的 Skill 安装。安装、启动、停止、迁移、历史补强和外部预检都有副作用，执行前必须阅读相应文档并明确授权。
@@ -145,10 +136,11 @@ wing-dog/
 
 ```powershell
 python scripts\validate_skill.py
+python scripts\validate_skill.py --runtime
 python -m unittest discover -s runtime\tests -v
 ```
 
-第一条验证 Skill 的结构、预算、链接和运行时边界；第二条覆盖插件、数据规则、关系检索、受控公网搜索、导出、路由和 bootstrap 的隔离测试。它们不能证明真实 MySQL、Hermes、DDGS、飞书、计划任务或远程模型当前健康。
+前两条验证 Skill 的结构、来源声明、链接、回归标记和运行时边界；单元测试覆盖插件、数据规则、关系检索、受控公网搜索、导出、路由和 bootstrap 隔离。它们不能证明真实 MySQL、Hermes、DDGS、飞书、计划任务或远程模型当前健康。
 
 进一步阅读：[产品定位](documentation/product.md) · [架构说明](documentation/architecture.md) · [端到端记忆、上下文与路由](documentation/memory-context-routing.md) · [关键流程](documentation/flows.md) · [变量与秘密](documentation/variables.md) · [权限边界](documentation/permissions.md) · [测试地图](documentation/tests.md)
 
@@ -158,13 +150,13 @@ python -m unittest discover -s runtime\tests -v
 2. **顺其自然也要行动。** 该表达就表达，该邀约就邀约；对方不接时体面收住。
 3. **行为比标签可靠。** 不凭 MBTI、性别或一次聊天替目标对象读心。
 4. **互惠比追到更重要。** 减少内耗、保留尊严和未来选择权也是成功。
-5. **策略必须说明代价。** 可以讨论表达与节奏，但必须交代条件和长期成本。
+5. **先给成品，再按需解释。** 即时回复不被理论淹没；完整策略分析再说明条件和关键权衡。
 6. **同意和退出权不可绕过。** 明确拒绝不是需要破解的障碍。
 7. **危险情境先保安全。** 暴力、胁迫、跟踪、诈骗和自伤风险不能用普通恋爱话术处理。
 
 ## 来源、许可与贡献
 
-Wing-Dog 改造自 [powerycy/goutoujunshi](https://github.com/powerycy/goutoujunshi)，并吸收了 [hotcoffeeshake/tong-jincheng-skill](https://github.com/hotcoffeeshake/tong-jincheng-skill) 的部分经验框架。具体基线、版权和 MIT 许可见[第三方声明](references/THIRD_PARTY_NOTICES.md)。
+Wing-Dog 改造自 [powerycy/goutoujunshi](https://github.com/powerycy/goutoujunshi)，并吸收了 [hotcoffeeshake/tong-jincheng-skill](https://github.com/hotcoffeeshake/tong-jincheng-skill) 与 [Wike-CHI/mystery-perspective](https://github.com/Wike-CHI/mystery-perspective) 的部分经验框架。具体基线、版权和 MIT 许可见[第三方声明](references/THIRD_PARTY_NOTICES.md)。
 
 项目继续采用 [PolyForm Noncommercial License 1.0.0](LICENSE)，并保留上游要求的声明：
 

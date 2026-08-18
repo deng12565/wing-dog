@@ -1,4 +1,4 @@
 interface:
   display_name: "Wing-Dog"
-  short_description: "看清关系信号，给出自然、尊重边界的下一步"
-  default_prompt: "使用 Wing-Dog（$goutoujunshi）帮我判断当前恋爱阶段，并给一个自然的推进、观察或停止动作。"
+  short_description: "判断互动阶段与互惠，给出自然、有吸引力、能直接复制的首选回复"
+  default_prompt: "使用 $goutoujunshi 判断当前互动任务和节奏，直接给我一个自然、有吸引力、可复制的首选回复。"
