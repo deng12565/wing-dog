@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-from goutoujunshi.database import apply_schema, transaction
+from goutoujunshi.database import apply_schema, migration_fingerprint, transaction
 from goutoujunshi.enrichment import ENRICHMENT_PROMPT_VERSION
 from goutoujunshi.enrichment_jobs import (
     enrichment_job_status,
@@ -56,6 +56,10 @@ def command_health(_: argparse.Namespace) -> None:
 def command_init(_: argparse.Namespace) -> None:
     apply_schema()
     emit({"ok": True, "schema_version": 5})
+
+
+def command_migration_fingerprint(_: argparse.Namespace) -> None:
+    emit(migration_fingerprint())
 
 
 def _owner() -> str:
@@ -307,6 +311,7 @@ def parser() -> argparse.ArgumentParser:
     sub = result.add_subparsers(dest="command", required=True)
     sub.add_parser("health").set_defaults(func=command_health)
     sub.add_parser("init").set_defaults(func=command_init)
+    sub.add_parser("migration-fingerprint").set_defaults(func=command_migration_fingerprint)
     imp = sub.add_parser("import-legacy")
     imp.add_argument("path")
     imp.add_argument("--owner", required=True)

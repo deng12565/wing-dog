@@ -83,6 +83,12 @@ git clone https://github.com/deng12565/wing-dog.git ~/.codex/skills/wing-dog
 > [!IMPORTANT]
 > Hermes、飞书和 MySQL 是独立的受控部署面，不属于 `git clone` 即可完成的 Skill 安装。安装、启动、停止、迁移、历史补强和外部预检都有副作用，执行前必须阅读相应文档并明确授权。
 
+## 服务器常驻部署
+
+Rocky Linux 宿主机可通过 `deployment/linux/` 运行独立的 `gateway + mysql + backup` Compose 栈。MySQL 不映射宿主端口，Gateway 使用锁定 digest 的 Hermes 0.20.4 派生镜像，DDGS 从带 SHA256 锁的离线 wheelhouse 安装；完整迁移、回滚和本机长期冷备流程见[公司服务器部署与本机冷备](documentation/server-deployment.md)。
+
+服务器和本机不是双活。本机计划任务只在切换窗口禁用，原代码、Hermes、WSL MySQL、秘密、档案和备份长期保留；服务器运行期间本机数据不会自动同步。
+
 ## 兼容标识
 
 本轮采用分层改名以保护现有部署。公开品牌已经统一为 **Wing-Dog**，以下内部标识暂时保留：
@@ -125,6 +131,7 @@ wing-dog/
 │   └── THIRD_PARTY_NOTICES.md # 第三方来源和许可
 ├── tests/                     # Skill 场景规范
 ├── documentation/             # 架构、流程、权限和测试合同
+├── deployment/linux/          # Rocky Linux Compose、离线依赖与运维脚本
 ├── runtime/
 │   ├── goutoujunshi/          # 保留兼容名的 Hermes 插件和 MySQL 数据层
 │   ├── benchmarks/            # 合成中文检索集与验收器
@@ -144,7 +151,7 @@ python -m unittest discover -s runtime\tests -v
 
 前两条验证 Skill 的结构、来源声明、链接、回归标记和运行时边界；单元测试覆盖插件、数据规则、关系检索、受控公网搜索、导出、路由和 bootstrap 隔离。它们不能证明真实 MySQL、Hermes、DDGS、飞书、计划任务或远程模型当前健康。
 
-进一步阅读：[产品定位](documentation/product.md) · [架构说明](documentation/architecture.md) · [端到端记忆、上下文与路由](documentation/memory-context-routing.md) · [关键流程](documentation/flows.md) · [变量与秘密](documentation/variables.md) · [权限边界](documentation/permissions.md) · [测试地图](documentation/tests.md)
+进一步阅读：[产品定位](documentation/product.md) · [架构说明](documentation/architecture.md) · [服务器部署与本机冷备](documentation/server-deployment.md) · [端到端记忆、上下文与路由](documentation/memory-context-routing.md) · [关键流程](documentation/flows.md) · [变量与秘密](documentation/variables.md) · [权限边界](documentation/permissions.md) · [测试地图](documentation/tests.md)
 
 ## 设计原则
 

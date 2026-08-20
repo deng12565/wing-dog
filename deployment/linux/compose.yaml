@@ -1,0 +1,112 @@
+name: wing-dog
+
+services:
+  mysql:
+    image: ${MYSQL_IMAGE:?Set MYSQL_IMAGE to a pinned mysql:8.4.6 digest}
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --skip-log-bin
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      MYSQL_DATABASE: goutoujunshi
+      MYSQL_USER: goutoujunshi_app
+      MYSQL_PASSWORD_FILE: /run/secrets/mysql_app_password
+      TZ: UTC
+    secrets:
+      - mysql_root_password
+      - mysql_app_password
+    volumes:
+      - ${WING_DOG_DATA_ROOT:?Set WING_DOG_DATA_ROOT}/mysql:/var/lib/mysql
+    networks:
+      - database
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$(cat /run/secrets/mysql_root_password) mysqladmin ping -h 127.0.0.1 -uroot --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    cpus: 2.0
+    mem_limit: 2g
+    pids_limit: 256
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deployment/linux/Dockerfile
+      args:
+        HERMES_BASE_IMAGE: ${HERMES_BASE_IMAGE:?Set HERMES_BASE_IMAGE to a pinned digest}
+    image: wing-dog-hermes:${WING_DOG_IMAGE_TAG:-0.20.4}
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command: ["python", "/opt/wing-dog/deployment/linux/supervisor.py"]
+    environment:
+      HERMES_HOME: /opt/data
+      HERMES_UID: ${HERMES_UID:-1000}
+      HERMES_GID: ${HERMES_GID:-1000}
+      PYTHONPATH: /opt/hermes:/opt/wing-dog/runtime
+      WING_DOG_PROJECT_ROOT: /opt/wing-dog
+      WING_DOG_SUPERVISOR_INTERVAL_SECONDS: ${WING_DOG_SUPERVISOR_INTERVAL_SECONDS:-60}
+      TZ: Asia/Shanghai
+    volumes:
+      - ${WING_DOG_CODE_ROOT:?Set WING_DOG_CODE_ROOT}:/opt/wing-dog:ro
+      - ${WING_DOG_DATA_ROOT}/hermes:/opt/data
+      - ${WING_DOG_DATA_ROOT}/secrets/hermes.env:/opt/data/.env
+      - ${WING_DOG_CODE_ROOT}/.local/relationships:/opt/data/relationships
+    networks:
+      - database
+      - egress
+    healthcheck:
+      test: ["CMD", "python", "/opt/wing-dog/deployment/linux/healthcheck.py"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 120s
+    cpus: 4.0
+    mem_limit: 6g
+    pids_limit: 512
+    logging: *logging
+
+  backup:
+    image: ${MYSQL_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command: ["bash", "/opt/wing-dog/deployment/linux/backup.sh"]
+    environment:
+      BACKUP_ROOT: /backups
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      BACKUP_UID: ${HERMES_UID:-1000}
+      BACKUP_GID: ${HERMES_GID:-1000}
+      TZ: Asia/Shanghai
+    secrets:
+      - mysql_root_password
+    volumes:
+      - ${WING_DOG_CODE_ROOT}:/opt/wing-dog:ro
+      - ${WING_DOG_DATA_ROOT}/backups:/backups
+    networks:
+      - database
+    cpus: 1.0
+    mem_limit: 512m
+    pids_limit: 128
+    logging: *logging
+
+secrets:
+  mysql_root_password:
+    file: ${WING_DOG_DATA_ROOT}/secrets/mysql-root-password
+  mysql_app_password:
+    file: ${WING_DOG_DATA_ROOT}/secrets/mysql-app-password
+
+networks:
+  database:
+    internal: true
+  egress: {}

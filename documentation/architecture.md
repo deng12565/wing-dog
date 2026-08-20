@@ -44,6 +44,10 @@ Current public context, bound relationship group only
   -> at most 5 title/url/snippet records -> current session only
 ```
 
+Rocky Linux 常驻部署由 `deployment/linux/compose.yaml` 管理：`gateway` 运行 Hermes 0.20.4 派生镜像，`mysql` 是唯一权威关系库，`backup` 负责一致性日备份。MySQL 只连接 Compose 内部网络且不映射端口；Gateway 不挂载 Docker socket。官方 s6 以 root 完成 UID/GID 映射后，把 Gateway 与 supervisor 主进程降权到普通 `hermes` 用户。代码与数据根分别由 `WING_DOG_CODE_ROOT` 和 `WING_DOG_DATA_ROOT` 固定。
+
+本机 Windows/WSL 部署是长期冷备，不是第二个写节点。切换时禁用本机计划任务并正常停止服务，但保留任务、容器、卷、配置、秘密、档案和全部备份；线上期间不做双写或自动回流。
+
 在线关系检索没有 Ollama、Milvus、本地 embedding 或常驻检索 worker。共享 Milvus 服务或卷属于仓库外资源，本次移除代码不会启动、停止、清空或删除它们。
 
 ## 最终提示词组成
@@ -89,6 +93,8 @@ Hermes profile 使用免 API key 的 DDGS backend，并关闭 web debug。wrappe
 
 登录 supervisor 只维护 MySQL、Gateway/Feishu、路由、投影、临时媒体和 MySQL 日备份。bootstrap `verify` 通过 Hermes 实际 toolset resolver 硬校验全局 Feishu 只解析为 `goutoujunshi-user`、关系 profile 只解析为 `goutoujunshi + goutoujunshi-user`，并直接检查 `ddgs` 可导入；声明配置但实际解析泄漏或依赖缺失都会失败。安装、启动、停止、schema 迁移、回填、benchmark 和远程模型预检均是有副作用操作。
 
+Linux supervisor 每 60 秒执行相同范围的数据库检查、路由对账、投影重试和媒体清理；路由变化时通过 Hermes s6 生命周期正常重启 Gateway。`migration-fingerprint` 在一致性事务中对 12 张项目表计算行数和确定性 SHA256，不输出关系正文，用于初迁与回迁前后的逐表比较。
+
 ## 信任边界
 
 1. MySQL 或人物 binding 不明确时失败关闭，不用通用猜测替代。
@@ -107,4 +113,5 @@ Hermes profile 使用免 API key 的 DDGS backend，并关闭 web debug。wrappe
 - [权限边界](permissions.md)
 - [变量与秘密](variables.md)
 - [自动化与代理边界](automation.md)
+- [服务器部署与本机冷备](server-deployment.md)
 - [测试地图](tests.md)

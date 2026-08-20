@@ -129,7 +129,18 @@
 
 本节只描述脚本定义。当前计划任务、容器、Gateway 和飞书连接是否健康，需要独立的运行态检查。
 
-## 12. MySQL 增强检索与历史补强
+## 12. 公司服务器常驻与本机冷备
+
+1. 服务器 Compose 先只启动 MySQL，恢复暂存 dump、应用 schema、安装 Skill/plugin 并完成模型、DDGS 和工具面预检；此阶段远端 Gateway 保持停止。
+2. 切换窗口禁用本机 `Hermes-Goutoujunshi` 计划任务并正常停止 Gateway/MySQL，不删除计划任务、Hermes、WSL 容器、卷、配置、秘密、档案或备份。
+3. 本机无写入后生成最终 dump、SHA256 和 12 表 `migration-fingerprint`；远端恢复最终库后，在启动 Gateway 前逐表比较行数与哈希。
+4. 任何差异都停止切换；远端 Gateway 必须保持关闭，重新启用本机计划任务并恢复本机作为唯一连接。
+5. 指纹一致后只启动远端 Gateway/backup，确认飞书只有一个连接，再重建只读投影并完成 owner 发起的真实消息验收。
+6. 服务器运行期间本机不自动同步。离职前回迁先停止远端 Gateway，再拉取最终 dump、指纹、代码 bundle 和秘密白名单包；本机恢复并验收通过后才轮换凭据。
+
+完整命令、权限和回滚条件见[公司服务器部署与本机冷备](server-deployment.md)。
+
+## 13. MySQL 增强检索与历史补强
 
 1. `relationship_search_events` 先解析一个当前活动 binding。`channel` 省略表示该人物全部渠道；显式渠道才过滤。`include_drafts=true` 必须指定渠道，draft 只走原文精确/子串分支。
 2. 搜索并行形成三支最多 40 条候选：原文精确/子串、原文 ngram FULLTEXT、增强文本 ngram FULLTEXT。固定 `RRF k=60`，权重依次为 `1.5 / 1.0 / 1.25`。
@@ -139,7 +150,7 @@
 6. 获准后，operator 显式运行 `enrichment-backfill` 统一 prompt 版本，再反复运行 `enrichment-work --limit 8`，最后用 `enrichment-status` 核对；达到 5 次上限的失败项需显式 `enrichment-retry-failed`。每批输入不超过 12000 字符，当前远程主模型只返回结构化增强，不保存原始响应/正文日志。
 7. 新 prompt 版本可把已完成事件重新排队；失败或中断通过 attempts/status/started_at 续跑。回填覆盖活动和归档人物的 `received/sent/background/analysis/correction`，不包含 draft。
 
-## 13. 已绑定群按需公网搜索
+## 14. 已绑定群按需公网搜索
 
 **入口**：`relationship_web_search`
 **成功结果**：只把匿名化后的最小公共查询发给 DDGS，并把有来源的临时结果返回当前会话

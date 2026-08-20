@@ -31,6 +31,12 @@ MySQL 关系检索没有语义开关、Milvus/Ollama URL、embedding 模型或 R
 
 `run_mysql_search_benchmark.py` 只接受数据库名以 `goutoujunshi_benchmark` 开头的独立库，拒绝连接权威库。它使用 `GOUTOUJUNSHI_BENCHMARK_DB_HOST/PORT/NAME/USER/PASSWORD`；启用 `--answer-eval` 时还使用上表的远程主模型变量。benchmark 会创建并最终删除自己的测试表，必须在专用库与单独授权下运行。
 
+## Linux Compose 变量与秘密
+
+`deployment/linux/server.env` 只保存非秘密的路径、UID/GID 和锁定镜像 digest，不进入 Git。真正秘密位于服务器数据根的 `secrets/`：`hermes.env`、`mysql-app-password` 和 `mysql-root-password`，目录权限必须为 `700`、文件为 `600`。
+
+`runtime/bootstrap.py prepare-server-secrets` 从受保护的本机 Hermes `.env` 只迁移 `OPENAI_API_KEY`、飞书 app/allowlist、owner、主模型地址/模型/reasoning，并生成新的远端 MySQL app/root 密码。它强制 `FEISHU_ALLOW_ALL_USERS=false`、数据库主机为 `mysql`、投影根为 `/opt/data/relationships`；不会迁移旧 token、无关 provider 或缓存凭据。
+
 ## 配置文件
 
 - `runtime/goutoujunshi/plugin.yaml`: v1.7.0 插件接口、6 个默认工具与 hooks，无秘密值。
@@ -38,6 +44,7 @@ MySQL 关系检索没有语义开关、Milvus/Ollama URL、embedding 模型或 R
 - Hermes 关系 profile `config.yaml`: Feishu toolsets 为 `goutoujunshi` 和 `goutoujunshi-user`，设置 `web.search_backend: ddgs`、`tools.tool_search: false`，并禁用原生 terminal、file、web、browser 等 toolsets；文件不在仓库中。bootstrap `verify` 还用 Hermes 实际 resolver 检查精确工具面，并直接 `import ddgs`，不能只信任 YAML 表面值。
 - `runtime/goutoujunshi/schema.sql`: schema v5，新增两个 MySQL 检索/任务表和 ngram FULLTEXT，无密码。
 - `scripts/wsl/Manage-Goutoujunshi-MySql.sh`: 面向仓库外的 WSL Docker MySQL；调用具有副作用。
+- `deployment/linux/compose.yaml` 与 `server.env`: Rocky Linux 常驻栈及其非秘密部署参数；真实 `server.env` 不进入 Git。
 
 ## Secret 处理与发布检查
 

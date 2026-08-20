@@ -666,6 +666,50 @@ class Runner:
         self.assertEqual(vision["extra_body"], {"detail": "high"})
         self.assertEqual(config["model"]["default_headers"]["User-Agent"], "codex_cli_rs/0.0.0")
 
+    def test_prepare_server_secrets_is_allowlisted_and_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.env"
+            target = root / "server-secrets"
+            values = {
+                "OPENAI_API_KEY": "model-secret",
+                "FEISHU_APP_ID": "app-id",
+                "FEISHU_APP_SECRET": "feishu-secret",
+                "FEISHU_DOMAIN": "feishu",
+                "FEISHU_ALLOWED_USERS": "owner-id",
+                "GOUTOUJUNSHI_OWNER_ID": "owner-id",
+                "GOUTOUJUNSHI_OPENAI_BASE_URL": "https://example.invalid/v1",
+                "GOUTOUJUNSHI_MODEL": "gpt-5.6-terra",
+                "GOUTOUJUNSHI_REASONING": "high",
+                "UNRELATED_SECRET": "must-not-migrate",
+            }
+            source.write_text(
+                "".join(f"{key}={value}\n" for key, value in values.items()),
+                encoding="utf-8",
+            )
+
+            first = bootstrap.prepare_server_secrets(source, target)
+            app_password = (target / "mysql-app-password").read_text(encoding="utf-8")
+            root_password = (target / "mysql-root-password").read_text(encoding="utf-8")
+            second = bootstrap.prepare_server_secrets(source, target)
+            env = bootstrap.load_dotenv(target / "hermes.env")
+
+            self.assertTrue(first["ok"])
+            self.assertEqual(first["files"], second["files"])
+            self.assertEqual(
+                (target / "mysql-app-password").read_text(encoding="utf-8"),
+                app_password,
+            )
+            self.assertEqual(
+                (target / "mysql-root-password").read_text(encoding="utf-8"),
+                root_password,
+            )
+            self.assertNotIn("UNRELATED_SECRET", env)
+            self.assertNotIn("GOUTOUJUNSHI_TOKEN_SECRET", env)
+            self.assertEqual(env["GOUTOUJUNSHI_DB_HOST"], "mysql")
+            self.assertEqual(env["GOUTOUJUNSHI_EXPORT_ROOT"], "/opt/data/relationships")
+            self.assertEqual(env["FEISHU_ALLOW_ALL_USERS"], "false")
+
     def test_vision_preserves_other_default_headers(self) -> None:
         config = {"model": {"default_headers": {"X-Custom": "kept"}}}
 

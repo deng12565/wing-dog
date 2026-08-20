@@ -1,0 +1,13 @@
+.git
+.local
+.tmp
+tmp
+output
+__pycache__
+*.pyc
+*.pyo
+.env
+.env.*
+deployment/linux/server.env
+RELATIONSHIP_HANDOFF_*.md
+deployment/linux/wheelhouse/*.json

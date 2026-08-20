@@ -82,6 +82,12 @@ If there is no specific person, describe your real life, usual ways of meeting p
 > [!IMPORTANT]
 > Hermes, Feishu, and MySQL form a separate controlled deployment surface. They are not installed by cloning the Skill. Installation, startup, shutdown, migration, historical enrichment, and external preflight commands are side-effectful and require explicit review and authorization.
 
+## Always-on server deployment
+
+`deployment/linux/` provides an isolated `gateway + mysql + backup` Compose stack for a Rocky Linux host. MySQL has no published host port; the Gateway derives from a digest-pinned Hermes 0.20.4 image, and DDGS is installed from a SHA256-locked offline wheelhouse. See [Server deployment and local cold backup](documentation/server-deployment.md) for the migration, rollback, and repatriation procedure.
+
+The server and local Windows environment are not active-active. The local scheduled task is disabled only during cutover, while the local code, Hermes installation, WSL MySQL, secrets, archives, and backups are retained indefinitely without automatic synchronization.
+
 ## Compatibility identifiers
 
 This release uses a layered rename to protect existing deployments. The public brand is **Wing-Dog**, while the following internal identifiers remain temporarily unchanged:
@@ -124,6 +130,7 @@ wing-dog/
 |   `-- THIRD_PARTY_NOTICES.md # Third-party sources and licenses
 |-- tests/                     # Skill scenario specifications
 |-- documentation/             # Architecture, flows, permissions, and tests
+|-- deployment/linux/          # Rocky Linux Compose and operations scripts
 |-- runtime/
 |   |-- goutoujunshi/          # Compatibility-named Hermes plugin and MySQL layer
 |   |-- benchmarks/            # Synthetic Chinese retrieval set and evaluators
@@ -142,7 +149,7 @@ python -m unittest discover -s runtime\tests -v
 
 The first command validates the Skill structure, budget, links, and runtime boundary. The second covers the plugin, data rules, relationship retrieval, controlled public web search, exports, routing, and isolated bootstrap behavior. Neither command proves that a real MySQL, Hermes, DDGS, Feishu, scheduled task, or external model is currently healthy.
 
-Further reading: [Product](documentation/product.md) · [Architecture](documentation/architecture.md) · [Flows](documentation/flows.md) · [Variables and secrets](documentation/variables.md) · [Permissions](documentation/permissions.md) · [Tests](documentation/tests.md)
+Further reading: [Product](documentation/product.md) · [Architecture](documentation/architecture.md) · [Server deployment and local cold backup](documentation/server-deployment.md) · [Flows](documentation/flows.md) · [Variables and secrets](documentation/variables.md) · [Permissions](documentation/permissions.md) · [Tests](documentation/tests.md)
 
 ## Design principles
 

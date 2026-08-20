@@ -1,459 +1,497 @@
-# 飞书关系消息端到端链路
+# 飞书关系消息如何进入 Skill 并形成决策
 
-本文解释一条飞书关系消息从进入 Hermes 到产生回复、按需核验公共信息、写入 MySQL、生成只读投影的完整过程，重点回答五个问题：
+本文解释一条飞书消息如何进入 Wing-Dog 的 Hermes 私有运行时、完整 `SKILL.md` 何时加载、谁决定调用哪个工具、关系建议最终由谁作出，以及这些环节分别消耗什么上下文和工具轮次。
 
-1. 系统里到底有哪几种“记忆”？
-2. 每轮给模型加载了哪些上下文？
-3. 群、人物、知识和旧记录分别怎么路由？
-4. 哪些内容在什么时候写入，哪些内容不会写入？
-5. 公网搜索何时允许、如何匿名化，结果与关系记忆有什么区别？
+证据边界是本迁移分支、plugin `1.7.0` 和已锁定的 Hermes `0.20.4` 源码。本文是源码与静态配置合同说明，不代表 MySQL、Hermes Gateway、飞书、DDGS 或远程模型此刻健康。文中的人物和消息均为虚构示例。
 
-本文只描述当前仓库源码和离线测试能够证明的行为，不代表本机此刻的 MySQL、Hermes Gateway、飞书连接、计划任务或远程模型处于健康状态。文中的“小林”、群、消息和数据 ID 均为虚构示例。
+## 先直接回答核心问题
 
-## 先给结论
-
-一条飞书消息不是“收到后立刻完整存进关系数据库”。实际链路是：
+飞书消息并不是先经过一个语义分类器，再“路由到恋爱 Skill”。真实过程是：
 
 ```text
-飞书消息
-  -> Hermes 建立或恢复短期 session
-  -> 插件校验 owner、群路由和人物 binding
-  -> 插件加载本人记忆与当前人物的有界上下文
-  -> 模型按需搜索旧事件；必要时在绑定群匿名查询当前公共信息
-  -> 模型读取 Skill 参考资料并形成建议
-  -> 模型成功调用受控工具后，当前事件、草稿和快照才写入 MySQL
-  -> MySQL 事务成功后排队生成只读 Markdown 投影
+Feishu MessageEvent
+  -> chat_id 命中 gateway.profile_routes，选择 goutoujunshi profile
+  -> plugin pre_gateway_dispatch 校验 owner、群和人物 binding
+  -> plugin 每轮设置 event.auto_skill = "goutoujunshi"
+  -> 仅新 session：Hermes Gateway 读取完整 SKILL.md，拼进首条 user 消息
+  -> plugin 注入 owner 记忆和当前人物的 channel_prompt
+  -> 主模型同时看到当前输入、Skill、上下文和 6 个业务工具 schema
+  -> 主模型自己判断“回复 / 邀约 / 观察 / 停止”以及要不要调用工具
+  -> 一旦模型调用工具，服务端代码再执行授权、检索、匿名化和事务
+  -> 主模型根据 tool result 继续推理，最后回复当前飞书群
 ```
 
-唯一常见的“模型调用前关系写入”是上一条未决草稿的发送状态：同一人物、同一渠道的下一条普通 owner 消息到达时，入口 hook 会先把上一条草稿追加为 `sent`；若本条明确说“没发”“未发送”“没采用”或“改了”，则追加一条 `correction`。斜杠命令不会触发这一规则。
+这里最容易混淆的三个事实是：
 
-当前消息里的新 `received`、本轮回复 `draft` 和关系快照不会仅因消息到达而自动写入。它们依赖模型成功调用 `relationship_commit_turn`。同样，模型没有成功调用 `user_memory_remember` 时，一句本人事实也不会仅因出现在聊天里就自动成为跨群个人记忆。
+1. **profile 路由不是 Skill 路由。** `chat_id -> goutoujunshi profile` 只决定使用哪套 Hermes 配置、插件和工具面。
+2. **Skill 激活是确定性的，关系决策不是。** 新 session 会确定性加载完整 `SKILL.md`；具体建议和工具选择由同一个主模型根据提示语义决定。
+3. **当前没有可工作的 references 按需读取链路。** 关系 profile 不暴露 `skill_view`、file 或 terminal；`SKILL.md` 里的 1-3 份参考资料表只是模型能看见的路径指引，不会自动把正文加载进请求。
 
-## 一、先区分三种记忆、两种派生数据和临时联网结果
+## 一、完整调用链
 
-日常说的“记忆”在这里至少包含三层。把它们混为一谈，就很容易误解 `/new`、跨群共享、人物隔离和 Markdown 投影。
+### 1. 飞书事件先选择 Hermes profile
 
-| 层次 | 保存什么 | 作用域 | 何时加载 | 何时写入或更新 | 是否为关系权威源 |
-| --- | --- | --- | --- | --- | --- |
-| Hermes 短期 session | 当前会话消息、工具结果和宿主组装的模型上下文 | 当前飞书来源对应的 Hermes session | Hermes 建立或恢复 session 时 | 由 Hermes 宿主管理；本插件不定义其持久化 schema | 否 |
-| owner 本人记忆 | 用户本人的身份、工作/学校、生活方式、偏好、目标和阶段性近况 | 同一 owner 跨飞书群共享 | 每个关系或通用群的上下文构建时 | `/me` 命令或模型调用本人记忆工具时 | 是，本人事实的权威源 |
-| 人物关系记忆 | 某一人物的 profile、渠道、事件、草稿、快照和修正 | 一个 owner 下的单一人物；渠道状态继续隔离 | 已绑定关系群构建上下文或按需搜索时 | 关系命令、入口草稿规则或关系提交工具成功时 | 是，关系数据的权威源 |
-| 检索文档和补强任务 | 权威事件原文副本/hash、检索摘要、概念、别名、实体和时间线索 | 跟随单一关系事件 | 只在搜索候选阶段使用 | 每个非 draft 事件写入时同步创建或排队 | 否，只是检索派生数据 |
-| `.local/relationships/*.md` | profile 与完整事件时间线的只读审阅视图 | 单一人物文件 | Codex 或人工审阅时 | MySQL 事务后异步导出，或 `/relation export` 立即导出 | 否，不能反向覆盖 MySQL |
-| 公网搜索结果 | DDGS 返回的网页标题、URL 和摘要 | 已绑定关系群的当前 Hermes session | 明确需要当前公共信息时 | 不持久化；只作为当轮 tool 消息 | 否，不是关系记忆或确认事实 |
-
-### 1. Hermes 短期 session
-
-Hermes session 负责让模型记得同一会话刚才聊了什么、调用了什么工具以及工具返回了什么。它不是本项目的关系数据库，也不能替代人物 binding。
-
-发送 `/new` 会开始一个干净的模型会话，并清理该 session 对应的插件内存缓存；它不会删除 MySQL 中的本人记忆、人物 profile、渠道、事件、草稿、快照或投影任务。普通一轮结束只清理临时媒体和本轮指标，不会立即丢弃同一 session 的稳定提示缓存。
-
-### 2. 跨群 owner 本人记忆
-
-本人记忆存放在 append-only 的 `user_memory_events`。只允许保存主语是用户本人、脱离具体女生仍然成立、由用户明确陈述的可复用事实。
-
-- `persistent`：长期有效。
-- `today`：到北京时间次日零点失效。
-- `week`：到下周一北京时间零点失效。
-- `correct`：追加新事件并指向旧条目，不覆盖旧历史。
-- `forget`：追加忘记事件，使目标条目不再进入有效上下文，但审计历史仍在。
-
-有效条目查询会排除已过期、已被纠正或已被忘记的条目。上下文默认最多取约 2000 个正文字符，每个类别最多 8 条，并优先保留 `current_context` 和较新的内容。
-
-女生信息、第三方信息、聊天原文、关系判断、模型推断、临时情绪、截图路径、密码、密钥、证件号、支付信息和精确住址不属于本人记忆。
-
-### 3. 单人物关系记忆
-
-关系记忆由以下 MySQL 表共同表达：
-
-| 表 | 职责 |
-| --- | --- |
-| `relationship_profiles` | 人物状态、当前渠道、已知事实、保守判断、未知项和回复偏好 |
-| `chat_bindings` | 把一个飞书群绑定到一个 owner 下的一个人物 |
-| `source_channels` | 维护微信、抖音、朋友圈、线下和其他渠道 |
-| `relationship_events` | 保存 `received`、`sent`、`draft`、`background`、`analysis`、`correction` 六类事件 |
-| `relationship_snapshots` | 保存有版本的关系状态快照 |
-
-每个女人的 profile 和事件独立。旧事件检索可以在同一人物内跨渠道，但不能跨人物；草稿是否已发送仍必须逐渠道判断。微信的新消息不能确认抖音草稿。
-
-### 4. 为什么检索文档和 Markdown 不是记忆源
-
-`relationship_event_search_documents` 可以包含模型生成的摘要、概念和别名，但这些字段只帮助找到候选事件。搜索最终必须用当前 binding 回到 `relationship_events` 读取权威正文，并把 correction 闭包放在被纠正事件之前。
-
-`.local/relationships/*.md` 也是从 MySQL 重新读取后生成的结果。即使投影生成失败，已经提交的 MySQL 事务仍然有效；反过来手工编辑投影也不构成关系数据修正。
-
-## 二、四种“路由”分别怎么路
-
-系统里同时存在接入路由、知识路由、历史检索路由和公网搜索路由。四者解决的问题不同。
-
-### 1. 飞书群到 Hermes profile 和人物的接入路由
-
-```mermaid
-flowchart TD
-    A[飞书事件到达 Hermes] --> B{平台是 Feishu?}
-    B -- 否 --> Z[插件不接管]
-    B -- 是 --> C{是 /relation 或 /me 命令?}
-    C -- 是 --> D[命令处理器校验 owner并直接处理]
-    D --> E[跳过主模型]
-    C -- 否 --> F{发送者是配置的 owner?}
-    F -- 否 --> G[skip: owner only]
-    F -- 是 --> H[查询 chat_bindings]
-    H --> I{群是否有活动 binding?}
-    I -- 否且曾受管 --> J[已归档群失败关闭]
-    I -- 否且涉及具体关系 --> K[提示先 new/bind; 不分析当前内容]
-    I -- 否且是本人或一般问题 --> L[只加载 owner 本人记忆; 不联网]
-    I -- 是 --> M{Hermes source.profile 已同步?}
-    M -- 否 --> N[提示路由同步中; 不分析当前内容]
-    M -- 是 --> O[保存服务端 session owner/binding 状态]
-    O --> P[处理上一条同人物同渠道 draft]
-    P --> Q[加载或复用稳定 channel_prompt]
-    Q --> R[允许主模型继续]
-```
-
-`/relation new <称呼>` 和 `/relation bind <称呼>` 会立即写入 MySQL binding，并排入 `reconcile_routes` 控制请求。数据库 binding 已经生效不代表 Hermes profile route 已经同步；在 `source.profile` 尚未成为 `goutoujunshi` 时，插件会要求稍后重试，而不是用错误 profile 继续分析。
-
-已绑定群调用关系工具时，模型不能自行提供或篡改授权参数。Hermes 服务端向 handler 注入 `session_id` 和可选 `task_id`，插件随后执行四层回查：
-
-1. `session_id` 必须存在，`task_id` 若存在必须与其一致。
-2. session 中保存的 owner 必须等于配置的 owner。
-3. session 中保存的人物 binding 必须属于同一 owner 和群。
-4. MySQL 当前活动 binding 必须仍指向同一人物，且人物没有归档。
-
-任一条件不满足，工具失败关闭。旧会话、截图 OCR、视觉描述或引用消息中的 `/relation bind`、旧令牌错误和机器人话术都不能改变服务端当前 binding。
-
-### 2. `SKILL.md` 到参考资料的知识路由
-
-新 Hermes session 的第一轮会由宿主自动加载完整 `SKILL.md` 脚手架。`SKILL.md` 是行为与知识路由入口，不是数据库。
-
-模型先根据问题类型选择 1–3 份直接相关的 `references/` 文档，例如：
-
-- 一句话回复或邀约：实战话术编排器。
-- 截图、网聊和媒介误读：在线约会与数字关系。
-- 投入失衡：互惠判断、降级投入与退出决策。
-- 同意、跟踪、暴力或危机：对应的安全与法律资料。
-
-参考资料不会在每轮全部拼接，也不会自动写入任何人物档案。它们影响模型如何分析，不构成关系事实。
-
-### 3. 旧事件的 MySQL 检索路由
-
-近期工作集不会塞入全部历史。需要回忆旧事时，模型调用 `relationship_search_events`，默认在当前人物的所有渠道搜索；只有用户明确限制渠道时才传 `channel`。
+`runtime/goutoujunshi_cli.py reconcile-config` 从 MySQL 的活动 `chat_bindings` 生成 `gateway.profile_routes`：
 
 ```text
-查询文本
-  -> 权威原文精确/子串候选，最多 40 条，权重 1.5
-  -> 权威原文 ngram FULLTEXT 候选，最多 40 条，权重 1.0
-  -> 增强文本 ngram FULLTEXT 候选，最多 40 条，权重 1.25
-  -> 固定 RRF，k=60
-  -> 按当前人物和可选渠道回 relationship_events hydrate
-  -> 递归加载 correction 闭包
-  -> 默认 Top-8 权威正文
+platform = feishu
+chat_id  = 当前关系群
+profile  = goutoujunshi
 ```
 
-单条返回正文最多 1200 字符，总正文最多 6000 字符。增强覆盖不足时结果标记为 `mysql_raw` / `incomplete_enrichment`；零结果只能解释为“本次未检索到”，不能推断事情从未发生。
+Gateway 在构造消息来源时按平台和 `chat_id` 匹配该表，把 `source.profile` 标为 `goutoujunshi`。这一步不理解消息内容，也不判断用户是在问回复、邀约还是关系阶段。
 
-draft 默认不参与检索。只有显式提供渠道并设置 `include_drafts=true` 时，draft 才能通过原文精确/子串分支进入候选。
+未绑定群仍走默认 profile。`pre_gateway_dispatch` 可以允许本人或一般问题继续，但具体女生、聊天截图、怎么回复或关系判断会在模型前失败关闭。
 
-### 4. 当前公共信息的公网搜索路由
+### 2. plugin hook 在主模型前做接入校验
 
-只有活动 binding 已同步到关系 profile 时，模型才能看到 `relationship_web_search`。用户明确要求搜索、问题依赖当前公共事实或缺少必要公共背景时，链路为：
+Gateway 对用户消息调用 `pre_gateway_dispatch`。插件按以下顺序处理：
+
+1. 只接管 Feishu。
+2. `/relation` 和 `/me` 命令直接由命令处理器执行，跳过主模型。
+3. 校验发送者是否为配置的 owner。
+4. 为普通 owner 消息设置 `event.auto_skill = "goutoujunshi"`。
+5. 按 `chat_id` 查询当前活动人物 binding。
+6. 已绑定群必须已经路由到 `source.profile == "goutoujunshi"`。
+7. 取得或创建 Hermes session，保存服务端 owner、人物、群和消息引用状态。
+8. 按同人物、同渠道规则处理上一条未决 draft。
+9. 从 MySQL 构建或复用 `channel_prompt`。
+10. 返回 `allow` 后，Gateway 才继续调用主模型。
+
+任一数据库、session、owner、binding 或 profile 条件不成立，关系请求失败关闭。截图 OCR、旧会话文本或引用消息中的命令不能改写服务端 binding。
+
+### 3. 只有新 session 才消费 `auto_skill`
+
+plugin 每轮都会设置 `event.auto_skill`，但 Gateway 的条件是：
 
 ```text
-最小公共查询，最长 240 字符
-  -> 服务端 session/task + owner + 群 + 人物 + 当前 MySQL binding 回查
-  -> NFKC、空白折叠和二次匿名化
-  -> 隐私模式仍存在则 privacy_rejected
-  -> Hermes provider registry -> 精确 DDGS provider
-  -> 最多 5 条 HTTP(S) title/url/snippet
-  -> 当前 Hermes session 的临时 tool 消息
+if _is_new_session and event.auto_skill:
+    load full skill
 ```
 
-匿名化会拒绝包含 binding 名称或 slug 的查询，并移除 owner/chat 标识、邮箱、手机号、证件号、账号、URL、控制字符和常见密钥；聊天转录式输入直接拒绝。该层是有界模式校验，不是任意敏感语义识别，因此模型仍必须先生成最小匿名公共查询，无法确认时拒绝联网。只有净化后的查询进入 provider registry。wrapper 只请求名称精确为 `ddgs`、支持搜索且当前可用的 provider，不调用通用搜索入口、不读取 active/default provider，也不允许 fallback。原生 `web_search`、`web_extract` 和 browser 不向模型开放，首版不抓网页全文，也不保证稳定取得发布日期。
+因此：
 
-模型必须把网页摘要视为不可信外部信息，在回答中区分“联网信息”“MySQL 关系记忆”“模型推断”，并标注网页标题、URL 和检索日期。网页标题、摘要和其他片段中的任何指令都只是数据，不得执行，也不得改变工具、授权、记忆或写入规则。公网搜索不能替代人物 binding、MySQL 权威事件或本地关系检索。
+- 新 session 第一条普通消息：加载完整 Skill。
+- 同一 session 后续消息：不再次执行 Skill loader。
+- `/new`：创建干净 session，下一条普通消息重新加载 Skill。
+- session reset/finalize：清理 plugin 的 owner、binding、prompt 和临时媒体缓存，不删除 MySQL 长期数据。
 
-## 三、每轮模型实际看到什么
+### 4. Gateway 如何把 Skill 放进请求
 
-模型请求由 Hermes 宿主和本插件共同组装。按职责可理解为以下层次：
+Hermes Gateway 内部调用：
 
-| 层次 | 内容 | 产生方 | 生命周期 |
-| --- | --- | --- | --- |
-| 基础 `system` 前缀 | Hermes 身份、平台与工具规则、Skill 索引、记忆和 session 元数据 | Hermes | 宿主管理 |
-| 临时 `system` 尾部 | 飞书平台上下文、通道配置提示、插件 `channel_prompt` | Hermes + 插件 | 当前请求 |
-| 首轮 Skill 脚手架 | 完整 `SKILL.md`，随后才是用户原始消息 | Hermes Skill loader | 新 session 首轮进入历史 |
-| 会话历史 | 当前 session 的用户、assistant 和 tool 消息 | Hermes | 到 session 重置或结束 |
-| owner 本人上下文 | 当前有效的跨群本人记忆 | 插件从 MySQL 读取 | 按 session 缓存 |
-| 人物关系上下文 | binding 规则、profile 快照字段和有界近期事件 | 插件从 MySQL 读取 | 按 session 缓存 |
-| 按需搜索结果 | Top-N 权威旧事件正文和检索状态 | 关系搜索工具 | 作为新的 tool 消息进入后续模型调用 |
-| 按需公网结果 | 最多 5 条网页标题、URL、摘要和检索元数据 | 受控公网搜索工具 | 作为临时 tool 消息进入当前 session，不持久化 |
-| 按需参考资料 | `SKILL.md` 路由选中的 1–3 份资料 | Skill/宿主 | 当前分析需要时 |
-
-### 人物关系工作集的内容和预算
-
-已绑定群构建 `channel_prompt` 时，插件先读取 profile 的：
-
-- `latest_state`
-- `known_facts`
-- `conservative_judgments`
-- `unknowns`
-- `response_preferences`
-- `current_channel`
-
-然后按以下优先级选择事件：
-
-1. 最新 snapshot 之后的 correction，最多 5 条。
-2. 当前渠道一个尚未被 `sent` 或 `correction` 解决的 draft。
-3. 当前渠道最近的真实 `received` / `sent`，最多 12 条。
-4. 最近 background，最多 3 条。
-
-事件正文的初选预算为 4000 字符，整个关系 JSON 的目标序列化上限为 3000 字符。放不下时会截断或省略，并提示通过 `relationship_search_events` 查旧记录。
-
-### 为什么同一 session 不会每轮重新塞整段数据库
-
-插件用 `session_id + owner_id + relationship_id` 缓存生成后的 `channel_prompt`。绑定没有变化时，同一 session 后续轮次复用完全相同的 prompt 字节，以便 Hermes 和模型前缀缓存生效。
-
-- `relationship_commit_turn` 或本人记忆工具成功后，会让其他受影响 session 的 prompt 失效，但保留当前 session 的稳定 prompt。
-- 当前 session 刚写入的数据通过 tool 结果和后续会话历史继续可见，而不是改写已经缓存的 system 尾部。
-- `/me`、`/relation` 等直接命令会按 owner 或人物清理相应缓存，下一条普通消息重新从 MySQL 构建。
-- 上一草稿在入口 hook 被确认或纠正时，当前人物相关缓存会先失效，本轮随后读取更新后的关系上下文。
-- session reset/finalize 会清理 owner、binding 和 prompt 缓存；普通 turn end 不会。
-
-因此，“数据库已经写入”和“当前 session 的固定提示已经重建”不是一回事。当前会话依赖 tool 结果与历史衔接；其他群或新 session 会在缓存失效后重新加载权威 MySQL 状态。
-
-## 四、记忆到底什么时候存
-
-| 内容或动作 | 是否持久化 | 实际触发时点 | 写入位置 | 关键条件 |
-| --- | --- | --- | --- | --- |
-| 当前飞书原始消息 | 进入 Hermes 当轮输入/会话历史；不会自动成为关系事件 | Hermes 接收消息时 | Hermes session，由宿主管理 | 不等于 MySQL `received` |
-| 上一条未决 draft 被视为已发送 | 是 | 下一条同人物、同渠道普通 owner 消息进入 hook 时，早于模型调用 | `relationship_events.sent` | 斜杠命令不触发；使用新消息的稳定 source ref 去重 |
-| 用户明确说上一 draft 没发或改了 | 是 | 同上，入口 hook 检测否定发送措辞时 | `relationship_events.correction` | correction 指向被解决的 draft |
-| 当前收到的对方消息 | 是，但不是入口自动写 | 模型成功调用 `relationship_commit_turn` 时 | `relationship_events.received` | 来源、说话人和渠道须能确认 |
-| 本轮可复制回复建议 | 是 | 与本轮事件在同一个 `relationship_commit_turn` 中提交 | `relationship_events.draft` | draft 只保存建议正文，不保存分析 |
-| 人物背景或分析 | 视需要持久化 | 模型提交已确认内容时 | `relationship_events.background/analysis` | 必须与事实、推断和未知边界一致 |
-| 关系状态摘要 | 只在有实质变化时 | `relationship_commit_turn.snapshot_patch` | `relationship_profiles` + 新版 `relationship_snapshots` | 无变化不应机械生成新快照 |
-| 用户本人长期或阶段性事实 | 是 | `/me remember`，或模型成功调用 `user_memory_remember` 时 | `user_memory_events` | 必须是明确、可复用、仅描述用户本人的事实 |
-| 本人记忆纠正或忘记 | 是，append-only | `/me correct/forget` 或对应工具成功时 | `user_memory_events` | 原事件不覆盖、不删除 |
-| 非 draft 事件的检索文档 | 是，派生数据 | 非 draft 事件事务写入时 | `relationship_event_search_documents` | 有合法补强则 `enriched`，否则 `raw_only` |
-| 补强任务 | 是，派生任务 | 非 draft 事件缺少合法补强时 | `relationship_event_enrichment_jobs` | 不阻断权威事件提交 |
-| Markdown 投影请求 | 是，任务状态 | 本轮事务确实产生变化时 | `export_jobs` | supervisor 后续处理；失败不回滚事件 |
-| Markdown 投影文件 | 是，只读派生文件 | export job 被处理，或显式 `/relation export` | `.local/relationships/<slug>.md` | 不能手工修改为权威数据 |
-| 截图文件、路径和二进制 | 否 | 只在当轮视觉/OCR 使用 | 临时媒体目录 | `post_llm_call` / session cleanup 后删除 |
-| 未绑定群中的具体女生问题 | 否 | 入口 hook 在模型前阻断 | 不写关系 MySQL | 回复“本条未记录、未分析” |
-| 公网搜索结果 | 否 | 绑定群按需调用 `relationship_web_search` 时 | 仅当前 Hermes session 的 tool 消息 | 不写事件、快照、draft、本人记忆、检索文档或投影 |
-
-### 单轮关系事务保证什么
-
-`relationship_commit_turn` 在一个 MySQL 事务内处理：
-
-1. 最多 12 个非 draft 事件。
-2. 最多一个标记为 `current_inbound` 的最新 `received`。
-3. 最多一个精确 draft。
-4. 可选的 material snapshot patch。
-5. 每个非 draft 事件的检索文档和补强任务状态。
-6. 有实际变化时的一个待处理 export job。
-
-事件类型、角色、渠道、正文和当前 inbound 规则任一非法，事务整体失败。`source_ref` 和派生的 `external_message_id` / `dedupe_key` 用于让同一飞书消息的重复工具调用返回原事件，而不是重复追加。
-
-入口 hook 的上一草稿确认是独立事务，不和随后模型的 `relationship_commit_turn` 属于同一个原子事务。也就是说，上一草稿已经被确认后，即使后面的模型调用失败，这个确认也不会自动回滚。
-
-## 五、完整虚构例子：截图问“怎么回”
-
-### 示例前置状态
-
-假设存在以下权威状态：
-
-| 数据 | 示例状态 |
-| --- | --- |
-| 飞书群 | `狗头军师｜小林` |
-| `chat_bindings` | 当前群活动绑定到人物“小林” |
-| `relationship_profiles.current_channel` | `微信` |
-| owner 本人记忆 | 暂无本周加班和周六安排 |
-| 历史关系事件 | 抖音渠道曾记录“小林转发过一个摄影展视频” |
-| 当前渠道未决 draft | 无 |
-
-用户在群里上传一张截图，并发送：
-
-> 微信：我这周工作日都加班，周六下午有空。她截图里说“周六下午我有空，最近想看摄影展”，怎么回？
-
-假设截图界面和用户说明足以确认“小林”是说话人、来源是微信。建议草稿固定为：
-
-> 那周六一起去看摄影展？我下午有空，看完顺路喝杯东西。
-
-### 第一轮时序
-
-```mermaid
-sequenceDiagram
-    actor U as 用户
-    participant F as 飞书
-    participant H as Hermes
-    participant P as Wing-Dog 插件
-    participant V as 视觉/OCR
-    participant D as MySQL
-    participant M as 主模型
-    participant X as 投影处理器
-
-    U->>F: 上传截图并发送“微信：...怎么回？”
-    F->>H: Feishu 事件、message_id、临时媒体
-    H->>P: pre_gateway_dispatch
-    P->>D: 查询 chat binding 与活动人物
-    D-->>P: 小林 / 微信 / active
-    P->>H: 保存服务端 session owner/binding并注入有界上下文
-    H->>V: 临时截图视觉理解与 OCR
-    V-->>H: 当轮文字描述和说话人线索
-    H->>M: system + Skill + session + channel_prompt + 当轮输入
-    M->>H: 调用 relationship_search_events
-    H->>P: 服务端注入 session_id/task_id
-    P->>D: 当前人物内跨渠道三分支搜索
-    D-->>M: Top-N 权威事件与检索状态
-    M->>H: 调用 user_memory_remember(week)
-    H->>P: 当前服务端 owner/session
-    P->>D: 追加本周本人近况
-    M->>H: 调用一次 relationship_commit_turn
-    H->>P: 当前服务端 owner/binding/source_ref
-    P->>D: 事务写 received、draft、snapshot、搜索文档和 export job
-    D-->>M: commit 成功及事件 ID
-    M-->>H: 返回可复制回复和简短建议
-    H-->>F: 只回复当前军师群
-    P->>P: post_llm_call 删除临时媒体
-    X->>D: 后续领取 export job
-    X-->>X: 原子替换只读人物 Markdown
+```text
+_load_skill_payload("goutoujunshi")
+  -> skill_view(name, preprocess=False)
+  -> _build_skill_message(...)
 ```
 
-### 第一轮各步骤发生了什么
+这里的 `skill_view` 是 Gateway 内部 Python 调用，不是关系 profile 向主模型开放的工具调用。`_build_skill_message` 生成一段新的 **user 消息**，顺序是：
 
-1. **Hermes 建立或恢复 session。** 原始飞书消息先成为本轮输入，不等于已经写成 `relationship_events.received`。
-2. **入口插件校验。** 插件确认平台是飞书、发送者是 owner、群绑定“小林”、Hermes profile 已同步，并保存服务端 session 对应的 owner 和 binding。
-3. **加载上下文。** 插件读取有效 owner 本人记忆、小林 profile、微信近期往来、一个未决微信草稿、快照后 correction 和少量 background。旧的抖音摄影展事件默认不在近期工作集里。
-4. **截图只在当轮解析。** 临时路径可用于视觉/OCR，但不会出现在关系事件、本人记忆或投影里。
-5. **先搜索旧历史。** 因为本轮是来源明确的聊天截图，提示要求模型先调用 `relationship_search_events`。查询不限制 `channel`，因此可以找到同一人物抖音渠道的摄影展历史。
-6. **保存本人近况。** “我这周工作日都加班，周六下午有空”只描述用户本人且在本周复用，模型调用 `user_memory_remember(category=current_context, lifespan=week)`。
-7. **一次提交关系变化。** 模型调用一个 `relationship_commit_turn`，其中包含最新微信 `received`、精确回复 `draft` 和有实质变化时的 snapshot patch。
-8. **MySQL 同步派生检索状态。** `received` 是非 draft，必须创建搜索文档；合法 `search_enrichment` 可直接标记为 `enriched`，缺失或非法则写 `raw_only` 并排队。draft 不创建搜索文档。
-9. **有变化才排投影。** 事务成功后只排入 export job，不要求在用户收到飞书回复前同步完成 Markdown 写盘。
-10. **最终回复发回军师群。** 系统不会把 draft 发送到微信或发给小林本人。
-11. **临时图片清理。** 模型调用结束后，插件删除允许的临时媒体并从登记中移除。
+```text
+[Skill 已自动激活的提示]
 
-### 第一轮写入前后
+[完整 SKILL.md，包括 frontmatter 和正文]
 
-| 存储位置 | 写入前 | 第一轮成功后 |
-| --- | --- | --- |
-| Hermes session | 旧会话历史 | 增加本轮输入、搜索结果、工具结果和最终回答 |
-| `user_memory_events` | 无本周安排 | 新增 `remember/current_context/week` |
-| `relationship_events` | 只有既有历史 | 新增微信 `received` 和微信 `draft` |
-| `relationship_snapshots` | 旧版本 | 若关系状态实质变化则新增一个版本 |
-| `relationship_event_search_documents` | 既有非 draft 文档 | 新增本轮 `received` 文档；没有 draft 文档 |
-| `relationship_event_enrichment_jobs` | 既有任务 | 本轮 `received` 对应 `done` 或 `pending` |
-| `export_jobs` | 无本轮任务 | 新增或复用一个 pending job |
-| `.local/relationships/小林.md` | 旧投影 | job 完成后才原子替换；不是事务提交点 |
-| 临时截图 | 当轮存在 | LLM 后删除，不进入长期存储 |
+[Skill 安装目录]
+[Hermes 识别到的 supporting files 清单]
 
-### 第二轮：她回复“三点怎么样？”
+[用户原始飞书消息]
+```
 
-之后用户发送下一条普通消息：
+它不是新的 `system` 提示。该 user 消息随后进入 session 历史。
 
-> 她回我：可以呀，三点怎么样？
+### 5. plugin 同时注入关系 `channel_prompt`
 
-入口 hook 在主模型运行前执行以下动作：
+`channel_prompt` 是当前请求的临时 system 尾部，由 plugin 从 MySQL 组装，主要包含：
 
-1. 当前人物仍是小林，未写渠道前缀，因此使用 profile 的当前渠道“微信”。
-2. 找到第一轮尚未被解决的微信 draft。
-3. 本条没有“没发”“未发送”“没采用”或“改了”等否定词。
-4. 追加一条 `sent`，正文精确复制第一轮 draft，`supersedes_event_id` 指向该 draft，证据类型为 `inferred_from_next_owner_message_same_channel`。
-5. 排入 export job，并使小林相关 prompt 缓存失效。
-6. 本轮重新加载时，关系上下文已经能看到刚追加的 `sent`。
+- owner 当前有效本人记忆；
+- 当前人物 binding 和默认渠道；
+- profile 的 `latest_state`、`known_facts`、`conservative_judgments`、`unknowns`、`response_preferences`；
+- 最新 snapshot 后最多 5 条 correction；
+- 当前渠道最多 1 条未决 draft；
+- 当前渠道最多 12 条真实 `received/sent`；
+- 最近最多 3 条 background；
+- 搜索、提交、公网查询、来源和安全边界提示。
 
-模型随后仍须调用 `relationship_commit_turn`，才能把“小林回复可以，建议三点”作为新的微信 `received` 写入。若还要生成下一条可复制回复，例如“好，那周六三点见，我把展馆位置发你”，它同样只会作为新的微信 draft 保存，不会代发。
+事件正文初选预算为 4000 字符，关系 JSON 目标上限为 3000 字符。owner 本人记忆另有约 2000 个正文字符的上限。
 
-### 如果第二轮是“上一条没发”
+### 6. 主模型开始作出关系判断和工具选择
 
-如果用户发送的是：
+模型拿到组合后的请求后，没有另一个 router 接管。它自己完成：
 
-> 上一条没发，我想换个说法。
+- 判断问题属于回复、邀约、关系阶段、互惠、退出、安全风险或一般问题；
+- 区分事实、推断和未知；
+- 判断是否需要旧关系历史；
+- 判断是否需要当前公共信息；
+- 判断是否出现了可复用的 owner 本人事实；
+- 选择回复、邀约、观察或停止；
+- 决定是否调用搜索、记忆或提交工具。
 
-入口 hook 不会生成 `sent`，而会追加一条指向原 draft 的 `correction`：用户明确否定上一草稿按原文发送，可能未发送、未采用或已修改。原 draft 保留用于审计，但不再被后续普通消息重复确认。
+`SKILL.md` 的“每次分析”和“按需加载”章节只是提供模型引导。当前没有程序级的关系阶段分类器、决策 enum、规则引擎、独立 router model 或结构化 decision record。
 
-如果第二轮只是 `/model`、`/new`、`/relation status` 或其他斜杠命令，则不会确认也不会纠正上一 draft。
+### 7. 工具被选择后才进入确定性代码
 
-## 六、硬约束和模型引导不能混为一谈
-
-| 类型 | 当前系统能保证什么 | 当前系统不能仅靠这一层保证什么 |
-| --- | --- | --- |
-| 入口硬约束 | 非 owner 拒绝；未绑定具体关系请求阻断；归档群不回退；错误 profile 要求等待同步 | 不能保证模型一定形成正确关系判断 |
-| 工具授权硬约束 | 校验服务端 session/task、owner、群、人物和当前 MySQL binding | 不能保证模型一定主动调用工具 |
-| 数据事务硬约束 | 类型、渠道、数量、当前 inbound、去重、事件/索引/export job 原子性 | 不能判断截图里的说话人语义上是否真的识别正确 |
-| prompt/Skill 引导 | 要求区分事实/推断/未知，截图先搜索再提交，只保存精确 draft | 模型仍可能漏掉搜索、提交或本人记忆工具调用 |
-| `tools.tool_search: false` | 让 6 个受控工具 schema 每轮直接可见，减少工具未披露 | 不等于强制模型调用，也不等于工具调用成功 |
-| 公网搜索 wrapper | 硬校验 binding、二次匿名化、限制为 5 条标题/URL/摘要 | 不能保证外部网页正确、完整或没有恶意内容 |
-| 投影任务 | MySQL 成功后可异步重试只读投影 | 投影成功与否不能改变 MySQL 权威结果 |
-
-关系 profile 当前默认注册并直接暴露的 6 个工具是：
+当前关系 profile 每轮直接暴露 6 个 schema：
 
 1. `relationship_commit_turn`
 2. `relationship_search_events`
-3. `user_memory_remember`
-4. `user_memory_correct`
-5. `user_memory_forget`
-6. `relationship_web_search`
+3. `relationship_web_search`
+4. `user_memory_remember`
+5. `user_memory_correct`
+6. `user_memory_forget`
 
-未绑定群只有 `goutoujunshi-user` 的 3 个本人记忆工具。虽然源码保留部分兼容 handler，它们不在当前 `DEFAULT_TOOL_NAMES` 和 `plugin.yaml` 的默认工具清单中；Hermes 原生 web/browser 工具也不在模型可见清单中。
+`tools.tool_search: false` 的含义是这些 schema 不延迟披露，而不是强制模型调用。模型选择工具后，handler 才执行服务端 session/task、owner、群、人物和当前 MySQL binding 回查。
 
-最重要的结果是：prompt 说“必须搜索、必须提交”属于强引导，但当前没有一个 post-hook 会在模型漏调用时自动补写当前 `received` 或 draft。若工具没有被调用、授权失败或事务失败，本轮当前关系数据就没有成功写入 MySQL。运行指标可以记录 `tool_calls` 和 `tool_rounds`，但指标本身也不会代替写入。
+工具成功返回后，结果以 `tool` 消息进入下一次模型请求。模型可以继续调用工具或形成最终回答。
 
-## 七、失败和边界情况
+## 二、六种“路由”不能混为一谈
 
-| 情况 | 系统行为 | 当前关系消息是否写入 |
+| 名称 | 解决的问题 | 决策者 | 确定性 | 输出 |
+| --- | --- | --- | --- | --- |
+| profile 路由 | 这个 `chat_id` 使用哪套 Hermes profile | Gateway `profile_routes` | 是 | `source.profile` |
+| 人物 binding | 这个群属于哪个 owner 和人物 | plugin + MySQL | 是 | 单一活动 relationship |
+| Skill 激活 | 新 session 是否加载 `goutoujunshi` | plugin `auto_skill` + Gateway | 是 | 首条完整 Skill user 消息 |
+| 关系决策 | 应回复、邀约、观察还是停止 | 主模型 | 否，提示驱动 | 自然语言建议 |
+| 工具选择 | 是否搜索、联网、记忆或提交 | 主模型 | 否，提示驱动 | function call |
+| 数据执行 | 搜索哪些事件、能否联网、写入什么 | plugin/repository/MySQL | 是 | 有界 tool result 或错误 |
+
+因此，“消息已经进入 Skill”和“模型已经选中一个具体关系决策”是两件事。前者有明确代码条件，后者目前没有独立可观测的路由结果。
+
+## 三、首轮和后续轮次实际看到什么
+
+### 1. 新 session 第一轮
+
+```text
+Request 1
+├─ stable system
+│  ├─ Hermes 身份、平台和工具规则
+│  └─ session 等宿主元数据
+├─ ephemeral system tail
+│  ├─ Feishu 平台上下文
+│  └─ plugin channel_prompt
+├─ user
+│  ├─ Skill activation note
+│  ├─ 完整 SKILL.md
+│  ├─ Skill directory + 3 个 supporting-file 条目
+│  └─ 用户原始消息
+└─ tools
+   └─ 6 个业务工具 schema
+```
+
+当前关系 profile 没有 `skills` toolset，因此基础 system 不会生成可调用 Skill 的 available-skills 索引。Skill 正文来自 `auto_skill` 的首轮 user 注入，而不是系统索引。
+
+若消息包含截图，Hermes 的视觉处理还会产生当轮文字描述和说话人线索。图片路径和二进制不进入关系事件、owner 记忆或只读投影。
+
+### 2. 同一 session 后续轮次
+
+```text
+Request N
+├─ stable system
+├─ ephemeral system tail
+│  └─ 同 session 字节稳定的 channel_prompt
+├─ conversation history
+│  ├─ 第一轮包含完整 SKILL.md 的 user 消息
+│  ├─ 后续 user / assistant 消息
+│  └─ 已发生的 tool calls / tool results
+├─ current user message
+└─ 同样的 6 个业务工具 schema
+```
+
+Skill loader 没有再次读文件，但完整 Skill 仍作为历史参与后续请求，直到 session reset 或上下文压缩处理它。所谓“只加载一次”只表示 loader 执行一次，不表示后续 API 请求不再携带其历史内容。
+
+### 3. 缓存能做什么，不能做什么
+
+plugin 用 `session_id + owner_id + relationship_id` 缓存 `channel_prompt`，同一 session 在 binding 不变时复用完全相同的字节。这样有利于 Hermes agent cache 和模型前缀缓存。
+
+缓存不会让这些内容从逻辑上下文消失：
+
+- `channel_prompt` 仍属于每次模型请求；
+- 第一轮 Skill user 消息仍在会话历史；
+- 6 个工具 schema 仍直接可见；
+- provider 缓存可能减少重复计算或计费，但不等于释放上下文窗口；
+- 当前配置在 48000 tokens 开始主动裁剪，并在 64000 tokens 触发压缩流程；压缩后保留什么由 Hermes context compressor 决定。
+
+## 四、为什么当前 references 并没有被路由进来
+
+### 1. `SKILL.md` 里确实有知识路由表
+
+Skill 会提示模型：一句话回复优先实战话术、截图优先在线关系、投入失衡优先互惠/退出、安全问题优先法律与危机资料。这解释了“应该读什么”，但不提供读取能力。
+
+### 2. Hermes loader 没有自动内联 reference 正文
+
+`skill_view` 加载主 Skill 时只把 `SKILL.md` 正文放进 `content`，supporting files 只作为路径清单。它不会根据用户消息自动挑选并读取 1-3 个文件。
+
+Hermes `0.20.4` 对普通本地 Skill 的 reference 清单使用 `references/*.md` 顶层枚举，不递归进入子目录。当前包的静态结果是：
+
+| 项目 | 数量 |
+| --- | ---: |
+| `references/` 下 Markdown 总数 | 43 |
+| 顶层 Markdown | 1 |
+| `knowledge/`、`practical/` 中的嵌套 Markdown | 42 |
+| 正常 Skill loader 最终列出的 supporting files | 3 |
+
+这 3 个条目是顶层第三方声明、hero 资源和校验脚本；42 份关系知识正文没有出现在 loader 的 linked-files 清单里。
+
+### 3. 主模型也没有读取这些文件的工具
+
+关系 profile 的 Feishu toolsets 精确为 `goutoujunshi` 和 `goutoujunshi-user`。它没有：
+
+- `skills`，所以没有 `skill_view` / `skills_list`；
+- `file`，所以没有任意文件读取；
+- `terminal`，所以不能通过命令读取路径。
+
+所以当前真实状态不是“参考资料按需加载”，而是：
+
+```text
+完整 SKILL.md 已加载
+SKILL.md 中能看到 reference 路径
+reference 正文没有进入请求
+模型没有工具继续读取正文
+```
+
+Codex Skill 运行面仍可以按照 Codex 的 Skill 机制读取这些资料；这里的问题只针对受限的 Hermes 关系 profile。
+
+### 4. 当前 verify 字段不能证明 `skill_view` 可用
+
+`runtime/bootstrap.py verify` 输出的 `skill_view_enabled` 目前只检查 `agent.disabled_toolsets` 中是否没有 `skills`。但 Hermes 平台工具面是 allowlist 解析：`skills` 没被列入 `platform_toolsets.feishu` 时，即使它也没出现在 disabled list，最终仍不会暴露。
+
+同一个 verify 流程还会检查实际 resolved toolsets 是否精确为两个业务 toolset；这反而证明当前受限工具面不包含 `skills`。因此 `skill_view_enabled` 这个字段名不能作为参考资料可读性的证据。
+
+## 五、具体关系决策到底怎么产生
+
+### 1. 当前是一层主模型决策，不是多级决策树
+
+主模型同时接收：
+
+- 完整 `SKILL.md`；
+- 用户本轮消息和 session 历史；
+- owner 本人记忆；
+- 当前人物有界关系上下文；
+- 6 个工具 schema；
+- 如果已经搜索，则还有 tool result。
+
+然后在同一个模型循环中生成自然语言、function call 或两者。没有独立模块先输出：
+
+```json
+{
+  "scene": "reply",
+  "relationship_stage": "observing_reciprocity",
+  "action": "invite",
+  "confidence": 0.82
+}
+```
+
+上述结构当前不存在，所以日志可以看到工具调用和耗时，却不能直接回答“本轮命中了 Skill 的哪条决策分支”。
+
+### 2. 模型引导与硬约束的边界
+
+| 层次 | 能保证什么 | 不能保证什么 |
 | --- | --- | --- |
-| 非 owner 发消息 | 插件 `skip` | 否 |
-| 未绑定群问本人或一般问题 | 只加载 owner 本人记忆后允许模型回答 | 不读写任何人物关系 |
-| 未绑定群发女生问题或截图 | 模型前阻断，提示先 new/bind | 否；临时媒体清理 |
-| 曾绑定但已归档的群 | 失败关闭，不回退通用群 | 否 |
-| MySQL binding 已写但 Hermes profile 未同步 | 提示稍后重试 | 否 |
-| MySQL 或 session store 不可用 | 回复“本条未记录、未分析” | 当前关系内容不提交 |
-| 工具 session/task/owner/binding 回查失败 | 工具返回授权错误 | 否 |
-| 截图说话人或来源不确定 | 模型应只问一个必要问题 | 不应写成确定 `received` |
-| 搜索增强覆盖不完整 | 返回权威正文并标记降级 | 不把增强内容当事实 |
-| 搜索零结果 | 只能说本次未检索到 | 不生成“从未发生”的事实 |
-| 公网查询未通过匿名化 | 返回 `privacy_rejected`，不发出请求 | 否；不持久化查询或结果 |
-| DDGS 未注册、名称错配、不支持搜索、不可用、超时或异常 | 返回 `web_search_unavailable`，明确本次未联网核验 | 否；不 fallback，也不以模型知识冒充搜索结果 |
-| 网页结果为空 | 明确本次未找到可用公共来源 | 否；不生成“网上没有”的确定事实 |
-| `relationship_commit_turn` 任一字段非法 | 整个本轮关系事务回滚 | 否 |
-| 投影生成失败 | export job 标记 failed，后续可重试 | MySQL 已提交内容仍有效 |
-| 主模型跳过关系提交工具 | 仍可能生成文本回答，但无自动补写 | 当前 `received` / draft 不会进入 MySQL |
+| profile/binding | 群只能进入指定 profile 和单一人物 | 建议一定正确 |
+| Skill/channel prompt | 告诉模型如何判断、何时搜索和提交 | 模型一定遵循 |
+| 直接工具 schema | 模型每轮都看得到 6 个工具 | 模型一定调用 |
+| handler 授权 | 跨 owner、跨群、跨人物调用失败关闭 | 模型一定选择正确参数语义 |
+| MySQL 事务 | 类型、渠道、去重、事件/索引/export 一致 | 截图作者一定识别正确 |
+| 公网 wrapper | 匿名化、DDGS 锁定、5 条结果上限 | 网页一定正确或完整 |
 
-需要注意上一草稿确认的独立时序：它发生在入口 hook，可能早于后续的上下文构建或模型失败。因此排障时要分别检查“上一 draft 是否已被入口规则解决”和“当前消息是否被模型提交”，不能只看最终有没有回复。
+### 3. 一个“怎么回”请求的模型路径
 
-## 八、代码调用链索引
+例如用户在已绑定群发送来源明确的微信截图并问“怎么回”：
 
-| 环节 | 主要实现 | 关键入口 |
+```text
+主模型第一次请求
+  -> 根据 Skill 和 channel_prompt 判断是聊天回复场景
+  -> 按 prompt 要求调用 relationship_search_events
+
+关系搜索 tool result
+  -> 进入主模型第二次请求
+  -> 模型结合当前截图和旧事件形成回复方向
+  -> 如出现用户本人新事实，可调用 user_memory_remember
+  -> 调用一次 relationship_commit_turn 写 received + 精确 draft + 可选 snapshot
+
+记忆/提交 tool result
+  -> 进入后续主模型请求
+  -> 输出最终可复制回复和简短建议
+```
+
+模型可能在同一 assistant 工具轮发出多个互不依赖的 function call；依赖搜索结果才能决定的提交仍需要后续模型轮次。
+
+如果模型直接给文字而没有调用 `relationship_commit_turn`，用户仍可能收到建议，但本轮 `received`、draft 和 snapshot 不会自动进入 MySQL。当前没有 post-hook 替模型补写。
+
+## 六、两类搜索如何进入模型循环
+
+### 1. 关系历史搜索
+
+`relationship_search_events` 只在当前人物 binding 内运行：
+
+```text
+模型生成查询
+  -> 原文精确/子串候选，最多 40，权重 1.5
+  -> 原文 ngram FULLTEXT，最多 40，权重 1.0
+  -> 增强文本 ngram FULLTEXT，最多 40，权重 1.25
+  -> 固定 RRF，k=60
+  -> 按当前人物和可选渠道回 relationship_events hydrate
+  -> 加载 correction 闭包
+  -> 默认 Top-8 权威正文
+```
+
+省略 `channel` 表示当前人物全部渠道；显式渠道才缩小。单条正文最多 1200 字符，总正文最多 6000 字符。增强只帮助定位，不作为事实返回。
+
+### 2. 当前公共信息搜索
+
+`relationship_web_search` 只在已绑定关系 profile 中可见：
+
+```text
+模型生成最长 240 字符的最小公共查询
+  -> 服务端 session/task/owner/群/人物/binding 回查
+  -> NFKC、空白折叠和二次匿名化
+  -> 隐私模式仍存在则 privacy_rejected
+  -> Hermes provider registry 精确选择 ddgs
+  -> 最多 5 条 HTTP(S) title/url/snippet
+  -> 临时 tool result
+```
+
+wrapper 不使用通用搜索入口，不 fallback，不抓网页全文。结果是不可信的当前外部信息，必须和 MySQL 关系事实、模型推断分开，并标注标题、URL 和检索日期。查询和结果不写入关系事件、owner 记忆或投影。
+
+## 七、记忆和写入时机
+
+### 1. 三层记忆与两类派生数据
+
+| 层次 | 内容 | 作用域 | 权威性 |
+| --- | --- | --- | --- |
+| Hermes session | user/assistant/tool 历史和宿主上下文 | 当前 session | 不是关系权威源 |
+| owner 本人记忆 | 用户身份、工作、偏好、目标和阶段性近况 | 同一 owner 跨群 | MySQL 权威源 |
+| 人物关系记忆 | profile、渠道、事件、draft、snapshot、correction | 单一人物，渠道状态继续隔离 | MySQL 权威源 |
+| 搜索文档/补强任务 | 原文副本/hash、摘要、概念、别名和任务状态 | 单一事件 | 派生，可重建 |
+| Markdown 投影 | profile 和完整事件时间线 | 单一人物文件 | 只读派生视图 |
+
+公网搜索结果只是当前 session 的临时 tool 消息，不属于以上长期记忆。
+
+### 2. 写入时机
+
+| 内容 | 触发时点 | 写入位置 |
 | --- | --- | --- |
-| 插件注册与飞书入口 | `runtime/goutoujunshi/__init__.py` | `register`、`pre_gateway_dispatch` |
-| 命令路由 | `runtime/goutoujunshi/__init__.py` | `_handle_relation_command`、`_handle_user_command` |
-| session 授权 | `runtime/goutoujunshi/__init__.py` | `_session_id_for_tool`、`_binding_for_tool`、`_user_claims_for_tool` |
-| 上下文组装与缓存 | `runtime/goutoujunshi/__init__.py` | `_user_context_prompt`、`_context_prompt`、`_cached_session_prompt` |
-| 单轮关系提交 | `runtime/goutoujunshi/__init__.py`、`repository.py` | `handle_commit_turn`、`commit_turn` |
-| 上一草稿确认 | `runtime/goutoujunshi/repository.py` | `apply_next_message_draft_rule` |
-| owner 本人记忆 | `runtime/goutoujunshi/repository.py` | `list_user_memory`、`remember_user_memory`、`correct_user_memory`、`forget_user_memory` |
-| 人物绑定和近期上下文 | `runtime/goutoujunshi/repository.py` | `get_binding`、`recent_context` |
-| 权威事件与检索文档 | `runtime/goutoujunshi/database.py` | `append_event_with_status`、`upsert_event_search_document` |
-| 旧事件检索 | `runtime/goutoujunshi/search.py` | `search_relationship_events`、`reciprocal_rank_fusion` |
-| 受控公网搜索 | `runtime/goutoujunshi/__init__.py` | `relationship_web_search` handler、查询匿名化、DDGS registry 锁定与结果收敛 |
-| 只读投影 | `runtime/goutoujunshi/exporter.py` | `export_relationship`、`process_export_jobs` |
-| 表结构 | `runtime/goutoujunshi/schema.sql` | profile、binding、event、snapshot、search、job、user memory 表 |
+| 飞书原始消息 | Hermes 接收时进入 session | 不自动成为关系事件 |
+| 上一条未决 draft 的 sent/correction | 下一条同人物同渠道普通消息进入 hook 时 | `relationship_events`，早于主模型 |
+| 当前对方消息 | 模型成功调用 `relationship_commit_turn` | `relationship_events.received` |
+| 本轮可复制建议 | 同一次 `relationship_commit_turn` | `relationship_events.draft` |
+| material 状态变化 | `snapshot_patch` 非空且事务成功 | profile + 新 snapshot |
+| owner 本人事实 | `/me` 或本人记忆工具成功 | append-only `user_memory_events` |
+| 搜索文档/补强任务 | 非 draft 事件事务内 | 派生表和 job 表 |
+| Markdown 投影 | 事务排入 export job 后异步处理 | `.local/relationships/*.md` |
+| 公网查询和网页摘要 | 不持久化 | 仅当前 session tool 消息 |
+| 截图文件和路径 | 当轮临时使用后清理 | 不进入长期数据 |
 
-## 九、用一句话判断当前状态
+`relationship_commit_turn` 把本轮事件、一个精确 draft、可选 snapshot patch、非 draft 检索文档和 export job 放在一个 MySQL 事务中。入口 hook 对上一 draft 的确认是更早的独立事务，不会因后续模型失败而回滚。
 
-- **模型说过但工具没成功**：不等于已经记住。
-- **`relationship_commit_turn` 成功**：本轮关系事件/草稿/快照以 MySQL 为准。
-- **`user_memory_remember` 成功**：本人事实可以跨群加载，但不会污染具体人物档案。
-- **export job 还没完成**：Markdown 可能暂时旧，但 MySQL 仍是最新权威状态。
-- **发送 `/new`**：只换短期模型会话，长期记忆仍在。
-- **未绑定或权威状态不可用**：停止具体关系分析，不使用通用猜测兜底。
-- **`relationship_web_search` 成功**：只表示当前 session 取得了带 URL 的临时网页摘要，不等于关系记忆已经更新。
-- **公网搜索失败**：明确说明没有完成联网核验，不把模型既有知识包装成搜索结果。
+## 八、性能地图
+
+以下是静态源码能够证明的成本位置。字符数不是 provider token 数，源码也不能证明真实线上延迟。
+
+| 环节 | 发生频率 | 当前静态基线/指标 | 潜在优化收益 | 主要代价或风险 |
+| --- | --- | --- | --- | --- |
+| 基础 system | 每次模型 API 请求 | Hermes 生成；当前关系 profile 无 Skill index | 缩短固定前缀 | 可能丢失宿主约束 |
+| 首轮 Skill user 消息 | 每个新 session 构建一次，随后作为历史参与请求 | `SKILL.md` 4885 字符；按本机路径渲染约 5965 字符，不含原始消息和 channel prompt | 精简 Hermes 专用 Skill 可降低首轮和长期历史占用 | 规则删减会降低判断和安全一致性 |
+| supporting-file 清单 | 新 session 一次，随后留在历史 | 当前只列 3 项；42 个嵌套 reference 未列出 | 删除无用清单可小幅减负；修复读取链路可提升知识质量 | 开放文件能力会扩大权限面 |
+| `channel_prompt` | 每次请求 | `prompt_chars`、`prompt_reused`；关系 JSON 目标 <= 3000 字符，owner 正文约 <= 2000 字符 | 更精确的工作集可减 token | 裁剪过度会丢关键关系事实 |
+| 6 个工具 schema | 每次请求 | `tool_search=false`，全部直接可见 | 延迟披露或场景化工具面可减 schema token | 模型可能再次漏掉搜索/提交工具 |
+| 关系搜索 | 被模型选择时 | `relationship_search.duration_ms`、候选数和结果数 | 改善查询或减少无效搜索轮 | 搜索不足会漏旧事件 |
+| 公网搜索 | 被模型选择时 | `relationship_web_search.duration_ms`、状态、结果数 | 减少不必要联网与等待 | 不搜索会使用过时公共信息 |
+| 模型工具循环 | 每个 function-call round | `tool_calls`、`tool_rounds`、`api_duration_ms` | 合并无依赖调用、避免空转可直接降延迟 | 过度合并会让模型在缺少 tool result 时提前提交 |
+| 截图视觉处理 | 有附件时 | `image_count`、视觉处理 duration 指标 | 只处理必要图片、控制并发 | 跳过会失去作者和原文证据 |
+| 上下文压缩 | 长 session | proactive 48000 tokens，threshold 64000 tokens | 更早压缩可控制窗口 | 摘要可能损失 Skill 或关系细节 |
+
+### 当前可观测和不可观测
+
+现有指标可以回答：
+
+- prompt 是否复用、字符数多少；
+- 是否有图片；
+- 调用了几个工具、经过几轮 API；
+- 关系搜索、公网搜索和提交分别耗时多久；
+- 工具成功、隐私拒绝、provider 失败或事务失败。
+
+现有指标不能直接回答：
+
+- 本轮命中了 Skill 的哪一类关系场景；
+- 模型为什么选择“邀请”而不是“继续观察”；
+- 哪条 Skill 规则影响了最终建议；
+- 某份 reference 是否参与判断，因为当前 reference 正文根本不可读。
+
+### 后续优化入口，本轮不实施
+
+1. **精简 Hermes 专用 Skill。** 保留硬边界和决策内核，把 Codex 专用说明从 Hermes 首轮提示分离。
+2. **增加最小权限 reference reader。** 只允许读取当前 Skill 白名单文件，不开放通用 file/terminal。
+3. **由服务端选择性注入资料。** 在模型前确定有限场景并注入一份参考，但需要评估误路由成本。
+4. **增加结构化 decision trace。** 让模型输出场景、阶段、动作和证据引用，便于评测；不能把自报理由当作真实内部推理。
+5. **减少无效工具轮次。** 合并互不依赖的本人记忆和关系提交，保留“先搜索、后依赖结果提交”的顺序。
+
+这些方向在实施前需要分别测量 token、首字延迟、完整轮次耗时、工具漏调率、关系建议一致性和安全回归，不能只根据文档字符数决定。
+
+## 九、失败分支和权威边界
+
+| 情况 | 行为 | 是否写入当前关系消息 |
+| --- | --- | --- |
+| 非 owner | plugin skip | 否 |
+| 未绑定群的一般/本人问题 | 只加载 owner 本人上下文 | 不读写人物关系 |
+| 未绑定群的具体女生或截图问题 | 模型前阻断 | 否 |
+| 已归档群或 profile 未同步 | 失败关闭 | 否 |
+| MySQL/session store 不可用 | 明确本条未记录、未分析 | 否 |
+| 模型跳过 commit | 可能仍回复文字 | 否 |
+| commit 参数非法 | 整个本轮关系事务回滚 | 否 |
+| 关系搜索零结果 | 只能说本次未检索到 | 不生成“从未发生” |
+| 公网查询隐私拒绝 | 不发出请求 | 否 |
+| DDGS 不可用/超时 | 明确未完成联网核验，不 fallback | 否 |
+| 投影失败 | MySQL 已提交内容仍有效，job 可重试 | MySQL 是最新权威源 |
+
+`.local/relationships/*.md` 永远只是 MySQL 的只读投影。系统只回复当前军师群，不向微信、抖音或任何女性自动代发。
+
+## 十、代码证据索引
+
+### 当前仓库
+
+| 环节 | 入口 |
+| --- | --- |
+| profile route 生成 | `runtime/goutoujunshi_cli.py` 的 `reconcile-config` |
+| Skill 激活、binding 和上下文 | `runtime/goutoujunshi/__init__.py` 的 `pre_gateway_dispatch`、`_context_prompt`、`_cached_session_prompt` |
+| 六工具注册 | `runtime/goutoujunshi/__init__.py` 的 `register`、`DEFAULT_TOOL_NAMES` |
+| 关系提交 | `handle_commit_turn`、`repository.commit_turn` |
+| 关系检索 | `search_relationship_events`、`reciprocal_rank_fusion` |
+| 公网搜索 | `handle_relationship_web_search`、查询匿名化和 DDGS registry wrapper |
+| 上一 draft 规则 | `repository.apply_next_message_draft_rule` |
+| 只读投影 | `exporter.export_relationship`、`process_export_jobs` |
+
+### Hermes 0.20.4 宿主源码
+
+| 环节 | 入口 |
+| --- | --- |
+| 新 session 消费 `auto_skill` | `gateway/run.py` 的 `_is_new_session` / auto-skill block |
+| Skill 文件加载 | `agent/skill_commands.py` 的 `_load_skill_payload` |
+| 首轮 user 消息组装 | `agent/skill_commands.py` 的 `_build_skill_message` |
+| supporting files 枚举 | `tools/skills_tool.py` 的 `skill_view` |
+| platform toolset 解析 | `hermes_cli/tools_config.py` 的 `_get_platform_tools` |
+| Skill system index 条件 | `agent/system_prompt.py` 的 `has_skills_tools` |
+
+宿主升级后必须重新核对这些行为，特别是 supporting-file 枚举、auto-skill 注入位置、toolset allowlist 和上下文压缩。
+
+## 十一、一句话判断当前状态
+
+- **群路由到 `goutoujunshi` profile**：只说明进入了受限关系运行面。
+- **新 session 的 Skill 已加载**：说明完整 `SKILL.md` 已进入首轮 user 历史。
+- **模型给出了关系建议**：说明主模型完成了提示驱动判断，不代表有独立决策路由记录。
+- **模型提到某份 reference**：不代表它读过正文；当前 profile 无读取链路。
+- **工具没有成功**：关系消息、draft、snapshot 或本人事实没有相应持久化。
+- **`relationship_commit_turn` 成功**：本轮关系写入以 MySQL 为准。
+- **公网搜索成功**：只获得当前 session 的临时网页摘要，不更新关系记忆。
+- **发送 `/new`**：重新建立短期 session 和 Skill 首轮注入，不删除长期 MySQL 数据。
 
 ## 相关文档
 
 - [架构说明](architecture.md)
+- [产品定位](product.md)
 - [关键流程](flows.md)
 - [自动化与代理边界](automation.md)
+- [知识库治理](knowledge-base.md)
 - [权限边界](permissions.md)
 - [测试地图](tests.md)

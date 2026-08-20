@@ -26,3 +26,8 @@ __pycache__/
 
 # Local relationship records contain private conversation context.
 /.local/
+
+# Linux deployment bundles are generated locally and transferred out of band.
+/deployment/linux/wheelhouse/*.whl
+/deployment/linux/wheelhouse/*.json
+/deployment/linux/server.env

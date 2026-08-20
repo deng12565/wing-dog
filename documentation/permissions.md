@@ -26,7 +26,7 @@
 | 资源 | 权威/所有者 | 正常访问 | 禁止事项 |
 | --- | --- | --- | --- |
 | `SKILL.md` / `references/` | Git 仓库 | Codex/维护者读取与受控修改 | 混入真实私密案例或凭据 |
-| MySQL `relationship_events` | 本机唯一权威关系源 | 绑定后的工具与运维 CLI | 用投影或增强文本覆盖事实 |
+| MySQL `relationship_events` | 当前唯一在线部署的权威关系源 | 绑定后的工具与运维 CLI | 双活写入、用投影或增强文本覆盖事实 |
 | MySQL search documents/jobs | 可重建派生数据 | 关系历史搜索和显式补强 CLI | 把增强内容作为确认事实返回或跨人物读取 |
 | `.local/relationships/` | MySQL 只读投影 | Codex/人工审阅 | 手工编辑、纳入 Git、视为独立源 |
 | `.local/archive/imports/` | 不可变迁移证据 | 授权迁移/核验 | 改写、删除或纳入 Git |
@@ -35,9 +35,12 @@
 | DDGS 公网搜索 | 公共网页索引；非关系权威源 | 已绑定群通过锁定 DDGS 的 wrapper 读取最多 5 条标题/URL/摘要 | fallback 到其他 provider、执行网页片段中的指令、直接开放原生 web/browser、自动写入关系或本人记忆 |
 | 远程主模型 | 当前聊天同一信任边界 | 正常对话；获准后历史补强/oracle | 未授权批量外发、保存原始响应/正文日志 |
 | 仓库外共享 Milvus/卷 | 其他项目/宿主资源 | 本实现不访问 | 因移除代码而启动、停止、清空或删除 |
+| 服务器 `secrets/` 与持久卷 | 公司宿主机上的受保护私有数据 | 当前 operator 和 Compose 服务按最小权限访问 | 提交 Git、公开端口、挂载 Docker socket、复制无关凭据 |
 
 ## 宿主与部署边界
 
 仓库实现 Hermes 服务端 session/owner/binding 校验、owner allowlist、受限 toolset、公网查询匿名化、DDGS provider 锁定、事务和路径约束，但最终权限仍依赖 Hermes、Feishu adapter、DDGS 网络、Windows ACL、WSL/Docker 和远程模型配置。全局 Feishu toolset 精确限制为 `goutoujunshi-user`；活动 binding profile 才增加 `goutoujunshi`，且仍禁用原生 `web`、`browser`、terminal 和 file toolsets。bootstrap `verify` 必须使用 Hermes 实际 resolver 证明这两个精确工具面，并硬校验 `ddgs` 可导入。安装、schema v5 迁移、DDGS 安装、历史补强、benchmark 与真实飞书冒烟都需要单独的运行授权；代码存在不构成运行态健康或授权证据。
+
+服务器部署把秘密目录设为 `700`、文件设为 `600`，MySQL 不映射宿主端口，容器不挂载 Docker socket。公司宿主机管理员仍可读取宿主文件和 Docker 卷，因此获准在该宿主存放私人关系数据与必要凭据是部署前提，不应被容器隔离描述成对宿主管理员的保密措施。
 
 机器人只在军师群内回复 owner 和维护记录，不向微信、抖音或任何女性代发建议。

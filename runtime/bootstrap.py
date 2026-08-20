@@ -51,12 +51,23 @@ PROFILE_DISABLED_TOOLSETS = [
     "computer",
     *FEISHU_RECOVERED_TOOLSETS,
 ]
+SERVER_SECRET_SOURCE_KEYS = (
+    "OPENAI_API_KEY",
+    "FEISHU_APP_ID",
+    "FEISHU_APP_SECRET",
+    "FEISHU_DOMAIN",
+    "FEISHU_ALLOWED_USERS",
+    "GOUTOUJUNSHI_OWNER_ID",
+    "GOUTOUJUNSHI_OPENAI_BASE_URL",
+    "GOUTOUJUNSHI_MODEL",
+    "GOUTOUJUNSHI_REASONING",
+)
 SKILL_NAME = "goutoujunshi"
 SKILL_RUNTIME_ENTRIES = ("SKILL.md", "agents", "references", "scripts", "assets")
 PLUGIN_NAME = "goutoujunshi"
-HERMES_VISION_PATCH_VERSION = "0.20.0"
-HERMES_VISION_RUN_SHA256 = "687c82c4e4d75c19df65c57ab7401940ff4dff29f187ade59307ddc4439dddd0"
-HERMES_VISION_PATCHED_SHA256 = "4ca20d8a3989fef1521c58ac3601723896406d98832f08b533102f9fb58db73f"
+HERMES_VISION_PATCH_VERSION = "0.20.4"
+HERMES_VISION_RUN_SHA256 = "b671d6cd9ce1373c399215995cffe5d918142b33f3f0659ede95eee74ee17ab6"
+HERMES_VISION_PATCHED_SHA256 = "66c12945bbde1bab43151f6b3d4c3e7e1bb4d5b55bdec38a28111ccecf10198d"
 
 
 def emit(payload: Any) -> None:
@@ -350,6 +361,25 @@ def install_hermes_vision_patch(
     }
 
 
+def inspect_hermes_vision_patch(agent_root: Path) -> dict[str, Any]:
+    agent_root = agent_root.resolve()
+    target = agent_root / "gateway" / "run.py"
+    version_file = agent_root / "hermes_cli" / "__init__.py"
+    version_match = re.search(
+        r'^__version__\s*=\s*["\']([^"\']+)["\']',
+        version_file.read_text(encoding="utf-8"),
+        flags=re.MULTILINE,
+    )
+    source = target.read_text(encoding="utf-8")
+    patched = _patch_hermes_vision_source(source).encode("utf-8")
+    return {
+        "ok": True,
+        "version": version_match.group(1) if version_match else "unknown",
+        "source_sha256": _sha256_file(target),
+        "patched_sha256": hashlib.sha256(patched).hexdigest(),
+    }
+
+
 def command_install_hermes_vision_patch(args: argparse.Namespace) -> None:
     emit(
         install_hermes_vision_patch(
@@ -357,6 +387,10 @@ def command_install_hermes_vision_patch(args: argparse.Namespace) -> None:
             Path(args.backup_dir),
         )
     )
+
+
+def command_inspect_hermes_vision_patch(args: argparse.Namespace) -> None:
+    emit(inspect_hermes_vision_patch(Path(args.agent_root)))
 
 
 def load_dotenv(path: Path) -> dict[str, str]:
@@ -397,6 +431,73 @@ def update_dotenv(path: Path, updates: dict[str, str], removals: set[str] | None
     temp = path.with_suffix(path.suffix + ".tmp")
     temp.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
     os.replace(temp, path)
+
+
+def _write_restricted_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(content, encoding="utf-8", newline="\n")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+    os.chmod(path, 0o600)
+
+
+def prepare_server_secrets(source_env: Path, output_dir: Path) -> dict[str, Any]:
+    source = load_dotenv(source_env)
+    missing = [key for key in SERVER_SECRET_SOURCE_KEYS if not source.get(key)]
+    if missing:
+        raise RuntimeError(f"server secret source is missing required keys: {','.join(missing)}")
+    for key in SERVER_SECRET_SOURCE_KEYS:
+        if "\n" in source[key] or "\r" in source[key]:
+            raise RuntimeError(f"server secret value contains a newline: {key}")
+
+    output_dir = output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(output_dir, 0o700)
+    app_password_path = output_dir / "mysql-app-password"
+    root_password_path = output_dir / "mysql-root-password"
+    app_password = (
+        app_password_path.read_text(encoding="utf-8").strip()
+        if app_password_path.exists()
+        else secrets.token_urlsafe(48)
+    )
+    root_password = (
+        root_password_path.read_text(encoding="utf-8").strip()
+        if root_password_path.exists()
+        else secrets.token_urlsafe(48)
+    )
+    if not re.fullmatch(r"[A-Za-z0-9_-]{32,}", app_password):
+        raise RuntimeError("existing MySQL app password has an unsafe format")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{32,}", root_password):
+        raise RuntimeError("existing MySQL root password has an unsafe format")
+
+    hermes_values = {key: source[key] for key in SERVER_SECRET_SOURCE_KEYS}
+    hermes_values.update(
+        {
+            "FEISHU_ALLOW_ALL_USERS": "false",
+            "GOUTOUJUNSHI_DB_HOST": "mysql",
+            "GOUTOUJUNSHI_DB_PORT": "3306",
+            "GOUTOUJUNSHI_DB_NAME": "goutoujunshi",
+            "GOUTOUJUNSHI_DB_USER": "goutoujunshi_app",
+            "GOUTOUJUNSHI_DB_PASSWORD": app_password,
+            "GOUTOUJUNSHI_EXPORT_ROOT": "/opt/data/relationships",
+            "WEB_TOOLS_DEBUG": "false",
+        }
+    )
+    env_content = "".join(f"{key}={value}\n" for key, value in sorted(hermes_values.items()))
+    _write_restricted_text(output_dir / "hermes.env", env_content)
+    _write_restricted_text(app_password_path, app_password + "\n")
+    _write_restricted_text(root_password_path, root_password + "\n")
+    return {
+        "ok": True,
+        "output": str(output_dir),
+        "hermes_keys": len(hermes_values),
+        "files": ["hermes.env", "mysql-app-password", "mysql-root-password"],
+    }
+
+
+def command_prepare_server_secrets(args: argparse.Namespace) -> None:
+    emit(prepare_server_secrets(Path(args.source_env), Path(args.output_dir)))
 
 
 def find_feishu_owner(sessions_file: Path) -> str:
@@ -954,6 +1055,10 @@ def parser() -> argparse.ArgumentParser:
     preflight = commands.add_parser("preflight")
     preflight.add_argument("--env", required=True)
     preflight.set_defaults(func=command_preflight)
+    server_secrets = commands.add_parser("prepare-server-secrets")
+    server_secrets.add_argument("--source-env", required=True)
+    server_secrets.add_argument("--output-dir", required=True)
+    server_secrets.set_defaults(func=command_prepare_server_secrets)
     global_config = commands.add_parser("configure-global")
     global_config.add_argument("--config", required=True)
     global_config.add_argument("--source-env", required=True)
@@ -978,6 +1083,9 @@ def parser() -> argparse.ArgumentParser:
     install_vision_patch.add_argument("--agent-root", required=True)
     install_vision_patch.add_argument("--backup-dir", required=True)
     install_vision_patch.set_defaults(func=command_install_hermes_vision_patch)
+    inspect_vision_patch = commands.add_parser("inspect-hermes-vision-patch")
+    inspect_vision_patch.add_argument("--agent-root", required=True)
+    inspect_vision_patch.set_defaults(func=command_inspect_hermes_vision_patch)
     verify = commands.add_parser("verify")
     verify.add_argument("--config", required=True)
     verify.add_argument("--profile-config", required=True)

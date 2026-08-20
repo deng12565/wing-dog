@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import base64
 import contextlib
 import hashlib
 import json
 import os
 import re
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -20,6 +22,20 @@ from .enrichment import (
 CHANNELS = ("微信", "抖音", "朋友圈", "线下", "其他")
 EVENT_TYPES = {"received", "sent", "draft", "background", "analysis", "correction"}
 AUTHOR_ROLES = {"user", "other", "assistant", "system", "unknown"}
+MIGRATION_TABLES = (
+    "schema_migrations",
+    "relationship_profiles",
+    "source_channels",
+    "chat_bindings",
+    "relationship_events",
+    "relationship_snapshots",
+    "import_manifests",
+    "export_jobs",
+    "relationship_event_search_documents",
+    "relationship_event_enrichment_jobs",
+    "control_requests",
+    "user_memory_events",
+)
 
 
 def _pymysql():
@@ -73,6 +89,85 @@ def apply_schema() -> None:
     with transaction() as cursor:
         for statement in statements:
             cursor.execute(statement)
+
+
+def _fingerprint_value(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Decimal):
+        return {"decimal": str(value)}
+    if isinstance(value, datetime):
+        return {"datetime": value.isoformat(timespec="microseconds")}
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return {"base64": base64.b64encode(bytes(value)).decode("ascii")}
+    return {"text": str(value)}
+
+
+def migration_fingerprint() -> dict[str, Any]:
+    """Hash every durable project row without returning private field values."""
+    conn = connect()
+    table_results: dict[str, dict[str, Any]] = {}
+    overall = hashlib.sha256()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            cursor.execute("START TRANSACTION WITH CONSISTENT SNAPSHOT")
+            for table in MIGRATION_TABLES:
+                cursor.execute(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s
+                    ORDER BY ORDINAL_POSITION
+                    """,
+                    (table,),
+                )
+                columns = [str(row["COLUMN_NAME"]) for row in cursor.fetchall()]
+                if not columns:
+                    raise RuntimeError(f"migration table is missing: {table}")
+                cursor.execute(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM information_schema.KEY_COLUMN_USAGE
+                    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=%s
+                      AND CONSTRAINT_NAME='PRIMARY'
+                    ORDER BY ORDINAL_POSITION
+                    """,
+                    (table,),
+                )
+                primary = [str(row["COLUMN_NAME"]) for row in cursor.fetchall()]
+                order_columns = primary or columns
+                quoted_columns = ",".join(f"`{name}`" for name in columns)
+                quoted_order = ",".join(f"`{name}`" for name in order_columns)
+                cursor.execute(f"SELECT {quoted_columns} FROM `{table}` ORDER BY {quoted_order}")
+                digest = hashlib.sha256()
+                header = json.dumps(columns, ensure_ascii=False, separators=(",", ":"))
+                digest.update(header.encode("utf-8"))
+                digest.update(b"\n")
+                count = 0
+                for row in cursor:
+                    values = [_fingerprint_value(row[name]) for name in columns]
+                    payload = json.dumps(
+                        values,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    digest.update(payload)
+                    digest.update(b"\n")
+                    count += 1
+                table_hash = digest.hexdigest()
+                table_results[table] = {"rows": count, "sha256": table_hash}
+                overall.update(f"{table}\0{count}\0{table_hash}\n".encode("ascii"))
+        conn.rollback()
+    finally:
+        conn.close()
+    return {
+        "ok": True,
+        "schema_version": 5,
+        "tables": table_results,
+        "sha256": overall.hexdigest(),
+    }
 
 
 def slugify(value: str) -> str:

@@ -28,8 +28,10 @@ python scripts\validate_skill.py --runtime
 | `test_exporter.py` | 1 | MySQL 权威的只读 Markdown 投影 |
 | `test_relationship_search.py` | 22 | 三支 RRF、MySQL 模式、纠正、人物/渠道/draft、显式 draft 不被三支候选挤出、输出预算、增强校验、权威 hash 复核、benchmark 纠正闭包、批量预算、任务重试、schema v5 和无向量路径 |
 | `test_schema_v5_mysql.py` | 2 | 在显式授权的专用 MySQL 测试库验证空库幂等，以及带历史事件、draft 和旧派生表的 v4 模拟迁移与二次幂等；默认跳过 |
+| `test_migration_fingerprint.py` | 2 | 12 张项目表清单和无正文的确定性行哈希 |
+| `test_linux_deployment.py` | 4 | Compose 无公开端口/无 Docker socket、锁定镜像、恢复确认门、supervisor 重启与媒体清理、本机保留边界 |
 
-当前测试发现清单合计 99 项，其中 2 项专用 MySQL 测试在没有显式测试库授权时跳过；该数量是测试地图，不代表本轮已经运行成功。
+当前测试发现清单合计 106 项，其中 2 项专用 MySQL 测试在没有显式测试库授权时跳过；该数量是测试地图，不代表本轮已经运行成功。
 
 ```powershell
 python -m unittest discover -s runtime\tests -p "test_*.py"
@@ -58,6 +60,8 @@ python -m unittest discover -s runtime\tests -p "test_*.py"
 - 独立 MySQL benchmark 和远程 answer oracle。
 - `runtime/bootstrap.py preflight`、host 配置、启动/停止脚本、Gateway/Feishu、计划任务和真实消息冒烟。
 - Hermes `tools post-setup ddgs`、`ddgs` import、公开无敏感词查询探针，以及未绑定/已绑定群经 Hermes 实际 resolver 得到的工具面核验。
+- Linux Compose 解析、锁定 digest、Hermes/DDGS 版本、视觉补丁、非 root、秘密权限、12 表指纹、日备份和临时恢复。
+- Gateway/MySQL 重启恢复、supervisor 路由重启与失败退避、投影重试、媒体清理、日志脱敏及单一 Feishu 连接。
 
 报告时必须分层：数据库健康不证明 Feishu 路由；静态配置不证明 adapter 收到有效规则；离线测试不证明历史补强已完成。运行路径无 Ollama/Milvus 依赖可通过仓库扫描和获批后的进程/网络观测分别验证。
 
