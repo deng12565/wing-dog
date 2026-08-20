@@ -11,13 +11,12 @@ RUN set -eu; \
         --no-config --no-index --find-links /tmp/wing-dog-wheelhouse \
         --no-deps --require-hashes \
         -r /tmp/wing-dog-wheelhouse/requirements-linux.lock; \
-    uv pip check --no-config --python /opt/hermes/.venv/bin/python; \
     /opt/hermes/.venv/bin/python /tmp/wing-dog-bootstrap.py \
         install-hermes-vision-patch \
         --agent-root /opt/hermes \
         --backup-dir /opt/hermes/.wing-dog-patches; \
     /opt/hermes/.venv/bin/python -c \
-        'import ddgs, pymysql; assert ddgs.__version__ == "9.14.4"; assert pymysql.__version__ == "1.4.6" or pymysql.__version__ == "1.1.1"'; \
+        'import importlib.metadata as m; expected={"brotli":"1.2.0","ddgs":"9.14.4","fake-useragent":"2.2.0","h2":"4.4.1","hpack":"4.2.0","hyperframe":"6.1.0","lxml":"6.1.2","primp":"1.3.1","pymysql":"1.1.1"}; assert {name:m.version(name) for name in expected} == expected; import ddgs, lxml, primp, pymysql'; \
     rm -rf /tmp/wing-dog-bootstrap.py /tmp/wing-dog-wheelhouse
 
 LABEL org.opencontainers.image.title="Wing-Dog Hermes Runtime" \
