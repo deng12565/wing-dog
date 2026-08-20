@@ -176,7 +176,7 @@ def command_export(args: argparse.Namespace) -> None:
 
 
 def command_retry_exports(args: argparse.Namespace) -> None:
-    emit(process_export_jobs(args.limit))
+    emit({"ok": True, **process_export_jobs(args.limit)})
 
 
 def _atomic_yaml(path: Path, data: dict[str, Any]) -> None:
