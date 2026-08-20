@@ -41,7 +41,7 @@ MySQL 关系检索没有语义开关、Milvus/Ollama URL、embedding 模型或 R
 
 - `runtime/goutoujunshi/plugin.yaml`: v1.7.0 插件接口、6 个默认工具与 hooks，无秘密值。
 - Hermes global `config.yaml`: Feishu toolset 精确为 `goutoujunshi-user`，未绑定群不具备关系或公网搜索能力；文件不在仓库中。
-- Hermes 关系 profile `config.yaml`: Feishu toolsets 为 `goutoujunshi` 和 `goutoujunshi-user`，设置 `web.search_backend: ddgs`、`tools.tool_search: false`，并禁用原生 terminal、file、web、browser 等 toolsets；文件不在仓库中。bootstrap `verify` 还用 Hermes 实际 resolver 检查精确工具面，并直接 `import ddgs`，不能只信任 YAML 表面值。
+- Hermes 关系 profile `config.yaml`: Feishu toolsets 为 `goutoujunshi` 和 `goutoujunshi-user`，设置 `web.search_backend: ddgs`、`tools.tool_search: false`，并禁用 Hermes 0.20.4 自动加入的 `bfl` 及原生 terminal、file、web、browser 等 toolsets；文件不在仓库中。bootstrap `verify` 还用 Hermes 实际 resolver 检查精确工具面，并直接 `import ddgs`，不能只信任 YAML 表面值。
 - `runtime/goutoujunshi/schema.sql`: schema v5，新增两个 MySQL 检索/任务表和 ngram FULLTEXT，无密码。
 - `scripts/wsl/Manage-Goutoujunshi-MySql.sh`: 面向仓库外的 WSL Docker MySQL；调用具有副作用。
 - `deployment/linux/compose.yaml` 与 `server.env`: Rocky Linux 常驻栈及其非秘密部署参数；真实 `server.env` 不进入 Git。

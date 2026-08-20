@@ -82,7 +82,7 @@ class BootstrapConfigTests(unittest.TestCase):
                 ["goutoujunshi", "goutoujunshi-user"],
             )
             self.assertTrue(
-                set(bootstrap.FEISHU_RECOVERED_TOOLSETS).issubset(
+                set(bootstrap.GLOBAL_DISABLED_TOOLSETS).issubset(
                     config["agent"]["disabled_toolsets"]
                 )
             )

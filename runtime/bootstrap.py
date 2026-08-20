@@ -39,6 +39,8 @@ USER_TOOLSET = "goutoujunshi-user"
 RELATIONSHIP_TOOLSET = "goutoujunshi"
 PROJECT_PLUGIN_TOOLSETS = [RELATIONSHIP_TOOLSET, USER_TOOLSET]
 FEISHU_RECOVERED_TOOLSETS = ["feishu_doc", "feishu_drive", "kanban"]
+HOST_NATIVE_DISABLED_TOOLSETS = ["bfl"]
+GLOBAL_DISABLED_TOOLSETS = [*HOST_NATIVE_DISABLED_TOOLSETS, *FEISHU_RECOVERED_TOOLSETS]
 PROFILE_DISABLED_TOOLSETS = [
     "terminal",
     "file",
@@ -49,7 +51,7 @@ PROFILE_DISABLED_TOOLSETS = [
     "cron",
     "mcp",
     "computer",
-    *FEISHU_RECOVERED_TOOLSETS,
+    *GLOBAL_DISABLED_TOOLSETS,
 ]
 SERVER_SECRET_SOURCE_KEYS = (
     "OPENAI_API_KEY",
@@ -811,7 +813,7 @@ def command_configure_global(args: argparse.Namespace) -> None:
     feishu_toolsets = [USER_TOOLSET]
     platform_toolsets["feishu"] = feishu_toolsets
     known_plugin_toolsets = _configure_known_plugin_toolsets(config)
-    disabled_toolsets = _merge_disabled_toolsets(config, FEISHU_RECOVERED_TOOLSETS)
+    disabled_toolsets = _merge_disabled_toolsets(config, GLOBAL_DISABLED_TOOLSETS)
     feishu = config.setdefault("platforms", {}).setdefault("feishu", {})
     feishu["enabled"] = True
     feishu["require_mention"] = False
@@ -998,7 +1000,7 @@ def command_verify(args: argparse.Namespace) -> None:
         )
         and all(
             toolset in result["global"]["disabled_toolsets"]
-            for toolset in FEISHU_RECOVERED_TOOLSETS
+            for toolset in GLOBAL_DISABLED_TOOLSETS
         )
         and PLUGIN_NAME in result["global"]["plugins_enabled"]
         and PLUGIN_NAME not in result["global"]["plugins_disabled"]

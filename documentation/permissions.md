@@ -39,7 +39,7 @@
 
 ## 宿主与部署边界
 
-仓库实现 Hermes 服务端 session/owner/binding 校验、owner allowlist、受限 toolset、公网查询匿名化、DDGS provider 锁定、事务和路径约束，但最终权限仍依赖 Hermes、Feishu adapter、DDGS 网络、Windows ACL、WSL/Docker 和远程模型配置。全局 Feishu toolset 精确限制为 `goutoujunshi-user`；活动 binding profile 才增加 `goutoujunshi`，且仍禁用原生 `web`、`browser`、terminal 和 file toolsets。bootstrap `verify` 必须使用 Hermes 实际 resolver 证明这两个精确工具面，并硬校验 `ddgs` 可导入。安装、schema v5 迁移、DDGS 安装、历史补强、benchmark 与真实飞书冒烟都需要单独的运行授权；代码存在不构成运行态健康或授权证据。
+仓库实现 Hermes 服务端 session/owner/binding 校验、owner allowlist、受限 toolset、公网查询匿名化、DDGS provider 锁定、事务和路径约束，但最终权限仍依赖 Hermes、Feishu adapter、DDGS 网络、Windows ACL、WSL/Docker 和远程模型配置。全局 Feishu toolset 精确限制为 `goutoujunshi-user`；活动 binding profile 才增加 `goutoujunshi`，且仍显式禁用 Hermes 0.20.4 自动加入的 `bfl` 及原生 `web`、`browser`、terminal 和 file toolsets。bootstrap `verify` 必须使用 Hermes 实际 resolver 证明这两个精确工具面，并硬校验 `ddgs` 可导入。安装、schema v5 迁移、DDGS 安装、历史补强、benchmark 与真实飞书冒烟都需要单独的运行授权；代码存在不构成运行态健康或授权证据。
 
 服务器部署把秘密目录设为 `700`、文件设为 `600`，MySQL 不映射宿主端口，容器不挂载 Docker socket。公司宿主机管理员仍可读取宿主文件和 Docker 卷，因此获准在该宿主存放私人关系数据与必要凭据是部署前提，不应被容器隔离描述成对宿主管理员的保密措施。
 
