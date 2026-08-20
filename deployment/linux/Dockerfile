@@ -1,4 +1,4 @@
-ARG HERMES_BASE_IMAGE
+ARG HERMES_BASE_IMAGE=nousresearch/hermes-agent@sha256:943935c838e6b839cda34b6e017142e6c157ad1615992f32287f37f532e07971
 FROM ${HERMES_BASE_IMAGE}
 
 USER root
@@ -8,8 +8,10 @@ COPY deployment/linux/wheelhouse/ /tmp/wing-dog-wheelhouse/
 RUN set -eu; \
     test -n "$(find /tmp/wing-dog-wheelhouse -maxdepth 1 -name '*.whl' -print -quit)"; \
     uv pip install --python /opt/hermes/.venv/bin/python \
-        --no-index --find-links /tmp/wing-dog-wheelhouse --require-hashes \
+        --no-config --no-index --find-links /tmp/wing-dog-wheelhouse \
+        --no-deps --require-hashes \
         -r /tmp/wing-dog-wheelhouse/requirements-linux.lock; \
+    uv pip check --no-config --python /opt/hermes/.venv/bin/python; \
     /opt/hermes/.venv/bin/python /tmp/wing-dog-bootstrap.py \
         install-hermes-vision-patch \
         --agent-root /opt/hermes \
