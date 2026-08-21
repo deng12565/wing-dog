@@ -19,19 +19,22 @@ python scripts\validate_skill.py --runtime
 
 | Module | Count | 主要合同 |
 | --- | ---: | --- |
-| `test_bootstrap.py` | 19 | host 配置、安装回滚、plugin 1.7.0 清单、global/profile 精确工具面、DDGS 安装合同、视觉补丁和静态核验 |
+| `test_bootstrap.py` | 24 | host 配置、安装回滚、plugin 1.8.0 清单、global/profile 双份安装与精确工具面、包/discovery 缺失失败关闭、四文件 runtime patch、profile session 安全轮换和静态核验 |
 | `test_plugin_surface.py` | 39 | owner/binding/session 失败关闭、prompt 缓存、tools/hooks、写入时增强，以及受控公网搜索的授权、匿名化、DDGS registry 锁定、provider 查询日志抑制、输出和零持久化 |
 | `test_user_memory.py` | 6 | owner 隔离、append-only correction/forget、过期和敏感值拒绝 |
 | `test_repository_performance.py` | 5 | 上下文预算、幂等 turn commit、draft 确认、snapshot no-op |
 | `test_legacy_import.py` | 3 | legacy 分类、correction/draft 和渠道隔离 |
 | `test_reconcile.py` | 2 | route 对账幂等及 Feishu adapter 规则镜像 |
 | `test_exporter.py` | 1 | MySQL 权威的只读 Markdown 投影 |
-| `test_relationship_search.py` | 22 | 三支 RRF、MySQL 模式、纠正、人物/渠道/draft、显式 draft 不被三支候选挤出、输出预算、增强校验、权威 hash 复核、benchmark 纠正闭包、批量预算、任务重试、schema v5 和无向量路径 |
-| `test_schema_v5_mysql.py` | 2 | 在显式授权的专用 MySQL 测试库验证空库幂等，以及带历史事件、draft 和旧派生表的 v4 模拟迁移与二次幂等；默认跳过 |
+| `test_relationship_search.py` | 22 | 三支 RRF、MySQL 模式、纠正、人物/渠道/draft、显式 draft 不被三支候选挤出、输出预算、增强校验、权威 hash 复核、benchmark 纠正闭包、批量预算、任务重试、schema v5 检索基线和无向量路径 |
+| `test_schema_v5_mysql.py` | 2 | 在显式授权的专用 MySQL 测试库验证 schema v6 空库幂等，以及带历史事件、draft 和旧派生表的 v4 模拟迁移与二次幂等；默认跳过 |
 | `test_migration_fingerprint.py` | 2 | 12 张项目表清单和无正文的确定性行哈希 |
-| `test_linux_deployment.py` | 4 | Compose 无公开端口/无 Docker socket、锁定镜像、恢复确认门、supervisor 重启与媒体清理、本机保留边界 |
+| `test_linux_deployment.py` | 5 | Compose 无公开端口/无 Docker socket、锁定镜像、global/profile 双份包与权限、恢复确认门、supervisor 重启与媒体清理、本机保留边界 |
+| `test_pinned_hermes_patch.py` | 4 | 在锁定 Hermes 0.20.4 源码上验证两轮 profile scope/session/history、首轮 onboarding/Skill、图片与说明聚合、日志脱敏和私有权限 |
+| `test_structured_import.py` | 8 | Echo 锁定 SHA/行规则、微信导出作者确认与 evidence 边界、唯一人物、逐字与 derived 边界、跨导出稳定消息 ID、错误 sent correction 闭包 |
+| `test_structured_import_cli.py` | 3 | 人物预检先于归档、manifest 原子发布和不可覆盖私有归档 |
 
-当前测试发现清单合计 106 项，其中 2 项专用 MySQL 测试在没有显式测试库授权时跳过；该数量是测试地图，不代表本轮已经运行成功。
+当前测试发现清单合计 126 项，其中 2 项专用 MySQL schema v6 测试在没有显式测试库授权时跳过。
 
 ```powershell
 python -m unittest discover -s runtime\tests -p "test_*.py"
@@ -55,12 +58,13 @@ python -m unittest discover -s runtime\tests -p "test_*.py"
 
 以下检查需要单独授权：
 
-- schema v5 对真实 `goutoujunshi` 的迁移及第二次幂等应用。
+- schema v6 对 disposable MySQL 与真实 `goutoujunshi` 的迁移及第二次幂等应用。
+- `#1210` 至 `#1221` correction、Echo 归档/结构化导入和 profile session 轮换。
 - `enrichment-backfill/work/status` 对活动和归档人物的历史补强。
 - 独立 MySQL benchmark 和远程 answer oracle。
 - `runtime/bootstrap.py preflight`、host 配置、启动/停止脚本、Gateway/Feishu、计划任务和真实消息冒烟。
 - Hermes `tools post-setup ddgs`、`ddgs` import、公开无敏感词查询探针，以及未绑定/已绑定群经 Hermes 实际 resolver 得到的工具面核验。
-- Linux Compose 解析、锁定 digest、Hermes/DDGS 版本、视觉补丁、非 root、秘密权限、12 表指纹、日备份和临时恢复。
+- Linux Compose 解析、锁定 digest、Hermes/DDGS/plugin 版本、四文件 runtime patch、非 root、秘密/日志权限、12 表指纹、日备份和临时恢复。
 - Gateway/MySQL 重启恢复、supervisor 路由重启与失败退避、投影重试、媒体清理、日志脱敏及单一 Feishu 连接。
 
 报告时必须分层：数据库健康不证明 Feishu 路由；静态配置不证明 adapter 收到有效规则；离线测试不证明历史补强已完成。运行路径无 Ollama/Milvus 依赖可通过仓库扫描和获批后的进程/网络观测分别验证。
@@ -90,6 +94,13 @@ python -m unittest discover -s runtime\tests -p "test_*.py"
 - prompt 合同必须明确网页标题、摘要和其他片段中的任何指令都是不可信数据，不得执行或改变工具、授权、记忆和写入规则。
 - 运行态验收必须使用无私人信息的公共查询，核验返回真实 URL、最多 5 条结果和来源标注；再分别确认未绑定群不能联网、已绑定群只通过 wrapper 联网，且 MySQL 没有因网页结果新增事件或本人记忆。
 - 本节定义 1.7.0 应验证的合同，不表示仓库测试、DDGS 安装、Gateway、Feishu 或真实群聊已经在当前环境执行成功；发布报告必须给出实际命令、退出码和结果。
+
+### 2026-08-21 plugin 1.8.0 / schema v6 仓库验收
+
+- 使用锁定 Hermes 0.20.4 源码和仅加入测试 `PYTHONPATH` 的离线 PyYAML/tomli/tzdata wheel 运行完整 runtime：123 项，121 通过，2 项 disposable MySQL schema v6 测试按默认授权门跳过。
+- 三项 pinned source fixture 通过：两轮 profile history、scope 顺序与首轮 onboarding gate；单图/多图/图片后说明及 sender/reply/thread/超时/上限；INFO 正文与视觉描述扫描及私有文件 mode。
+- repository tests 覆盖普通消息不确认 draft、严格显式状态、新 `received.confirm_previous_draft`、错误 sent correction、Echo source/manifest SHA、唯一人物、结构化导入幂等和不可覆盖归档。
+- 本记录只证明当前工作树与锁定源码的离线行为。disposable MySQL schema v6 重放、服务器 bootstrap/correction/import/session rotation/restart 和真实飞书验收尚未执行，仍需各自授权。
 
 ### 剩余边界
 

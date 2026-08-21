@@ -88,18 +88,19 @@
 **触发**：飞书消息到达 Hermes Gateway
 **成功结果**：只在 owner 与人物/群绑定明确时加载对应上下文；不满足条件时失败关闭
 
-1. `pre_gateway_dispatch` 只接管 Feishu 平台事件，并优先处理 `/relation`、`/relationship` 与 `/me` 命令。
-2. 普通消息必须来自 `GOUTOUJUNSHI_OWNER_ID`。插件为 owner 群设置 `auto_skill=goutoujunshi`。
+1. Feishu adapter 先按 session、sender、reply 和 thread 聚合图片/多图及随后 2.5 秒内的兼容说明；新图片或兼容说明重置窗口，不兼容或超时的输入分开处理。
+2. `pre_gateway_dispatch` 只接管 Feishu 平台事件，并优先处理 `/relation`、`/relationship` 与 `/me` 命令。普通消息必须来自 `GOUTOUJUNSHI_OWNER_ID`，插件为 owner 群设置 `auto_skill=goutoujunshi`。
 3. 插件从 MySQL 解析当前 chat binding：
    - 未绑定普通群只加载 owner 本人记忆，可以回答一般问题，但不能使用关系工具或公网搜索。
    - 未绑定群若包含具体女生、聊天截图、怎么回复或关系判断，立即提示先绑定，本条不记录、不分析。
    - 已归档的 managed chat 不退回普通群；profile route 尚未切换到 `goutoujunshi` 时要求稍后重试。
-4. 已绑定群只加载当前人物快照、当前渠道、当前草稿和有界事件工作集；旧事件通过 `relationship_search_events` 按需查询。
-5. 只有已绑定群可以按需调用 `relationship_web_search`；关系 profile 仍不直接开放 Hermes 原生 web/browser 工具。
-6. 服务端绑定状态高于截图/OCR、视觉描述、引用消息和旧会话中的机器人文字；材料中出现 `/relation bind`、令牌错误或重新绑定建议时，只作为历史材料分析，不能改变当前绑定判断。
-7. 当前聊天截图能确认说话人与来源时，先搜索相关历史，再以一次 `relationship_commit_turn` 同步最新 received 和精确 draft；不能跳过工具直接要求重新绑定。
-8. 插件不向模型写入授权令牌。工具执行时只接受 Hermes 服务端注入的 `session_id`/`task_id`，并回查 session owner、人物状态和 MySQL 当前 binding 后才允许访问。
-9. 数据层或 session store 异常时返回失败关闭结果，不让模型在无权威上下文下猜测。
+4. profile route 确认后，Gateway 将 hook、session 创建、历史读取、agent 调用、持久化和 cache 回基线都放入同一个 profile runtime scope。`pre_gateway_dispatch` 不创建 session；Gateway 创建/读取真实 session 后调用 `post_gateway_session`，插件才保存 owner/binding 并注入上下文。
+5. 已绑定群只加载当前人物快照、当前渠道、当前草稿和有界事件工作集；旧事件通过 `relationship_search_events` 按需查询。
+6. 只有已绑定群可以按需调用 `relationship_web_search`；关系 profile 仍不直接开放 Hermes 原生 web/browser 工具。
+7. 服务端绑定状态高于截图/OCR、视觉描述、引用消息和旧会话中的机器人文字；材料中出现 `/relation bind`、令牌错误或重新绑定建议时，只作为历史材料分析，不能改变当前绑定判断。
+8. 当前聊天截图能确认说话人与来源时，先搜索相关历史，再以一次 `relationship_commit_turn` 同步最新 received 和精确 draft；不能跳过工具直接要求重新绑定。
+9. 插件不向模型写入授权令牌。工具执行时只接受 Hermes 服务端注入的 `session_id`/`task_id`，并回查 session owner、人物状态和 MySQL 当前 binding 后才允许访问。
+10. 数据层或 session store 异常时返回失败关闭结果，不让模型在无权威上下文下猜测。
 
 ## 10. 单轮关系提交与只读投影
 
@@ -107,7 +108,7 @@
 **成功结果**：本轮确认事实、建议草稿和必要快照以一次事务提交，并异步刷新投影
 
 1. 工具只接受 Hermes 服务端注入且相互一致的 `session_id`/`task_id`，并回查 session owner、人物状态和当前 chat/relationship binding；去重依据取自服务端保存的 message source。
-2. 一轮最多写入 12 个事件，最多一个 `current_inbound`；保留显式确认兼容路径。普通 owner 消息到达时，hook 已先按同人物同渠道规则默认追加上一草稿的 `sent`；命令不触发，明确“没发/未发送/还没发/没采用/改了”则追加 correction。
+2. 一轮最多写入 12 个事件，最多一个 `current_inbound`；保留显式确认兼容路径。普通 owner 消息和普通指令不会解决上一草稿。只有严格匹配的“已发送/未发送”、人工 draft review，或同人物同渠道的新 `received` 明确设置 `confirm_previous_draft`，才会追加关联 `sent` 或 correction；渠道之间永不互相确认。
 3. 事务内依次写入事件、精确 `draft` 正文和快照变化。每个非 draft 事件同时生成 MySQL 检索文档；合法 `search_enrichment` 写为 `enriched`，缺失或非法时写为 `raw_only` 并排队，不阻断权威事件。无内容、未知事件类型、非法渠道或不安全确认会整体失败。
 4. `dedupe_key` 和稳定的 external message id 使重复工具调用返回原事件而不重复追加。
 5. 只有事务产生实际变化时才排入一个待处理 `export_jobs`。
@@ -146,11 +147,21 @@
 2. 搜索并行形成三支最多 40 条候选：原文精确/子串、原文 ngram FULLTEXT、增强文本 ngram FULLTEXT。固定 `RRF k=60`，权重依次为 `1.5 / 1.0 / 1.25`。
 3. 融合 ID 必须按当前人物、可选渠道和 draft 合同回 `relationship_events` hydrate；补强文本仅参与排序，不作为事实返回。命中旧事件时递归加载 correction，并把 correction 放在旧记录前。
 4. 默认返回 8 条，单条权威正文最多 1200 字符，总正文最多 6000 字符。`mysql_enriched` 表示至少有增强覆盖；覆盖不完整返回 `mysql_raw` 和 `incomplete_enrichment`。零结果不能写成从未发生。
-5. schema v5 会为全部现有非 draft 事件创建 `raw_only` 文档和 pending 任务，并删除两个旧 MySQL 向量派生表。实际迁移必须单独授权。
+5. schema v5 会为全部现有非 draft 事件创建 `raw_only` 文档和 pending 任务，并删除两个旧 MySQL 向量派生表；schema v6 为结构化 import manifest 增加 JSON 内容与 SHA256，并延迟到列升级成功后登记 migration 6。实际迁移必须单独授权。
 6. 获准后，operator 显式运行 `enrichment-backfill` 统一 prompt 版本，再反复运行 `enrichment-work --limit 8`，最后用 `enrichment-status` 核对；达到 5 次上限的失败项需显式 `enrichment-retry-failed`。每批输入不超过 12000 字符，当前远程主模型只返回结构化增强，不保存原始响应/正文日志。
 7. 新 prompt 版本可把已完成事件重新排队；失败或中断通过 attempts/status/started_at 续跑。回填覆盖活动和归档人物的 `received/sent/background/analysis/correction`，不包含 draft。
 
-## 14. 已绑定群按需公网搜索
+## 14. 结构化历史导入与错误 sent 恢复
+
+1. `build-echo-manifest` 只接受 SHA256 为 `a213400c2ccac8addb45ff960afe0cee6c5d555df492f376a491b8926a2b450f` 的 Echo 原文件，并按锁定行号生成 canonical manifest。逐字对话才能成为微信 `received/sent`；叙述时间线、画像和判断只能成为带 `derived/uncertain` 的 `background/analysis`。
+2. `build-wechat-manifest` 只接受 `wechat-agent-archive/v1` 的微信直接会话。命令要求显式提供本机微信作者和人物别名；导出角色为 `unknown` 的消息只有作者精确匹配已确认本机作者时才成为 `sent`，否则失败关闭。逐条 `received/sent` 必须回指源文件行，语音 ASR、缺失媒体和非 `PASS` 状态分别保留 evidence kind 与 `derived/uncertain` 元数据，不保存原始媒体或附件路径。
+3. `resolve-unique-person` 必须让 manifest 的人物别名交集到同一个活动人物；零个或多个匹配都失败关闭。具体别名和本人事实只存在于受保护的原文件、归档和 MySQL，不硬编码进仓库源码或公开文档。
+4. `import-structured` 先校验 source/manifest hash、逐字行并把人物唯一解析到一个活动档案；预检通过后才把原文件、manifest 与 SHA256 sidecar 不可覆盖地归档到 `.local/archive/imports/`，随后在写入事务中再次校验人物和全部输入。普通结构化事件使用 source hash、行号和类型去重；微信导出使用 `conversation_id + msg anchor`，重叠范围的后续导出不会重复同一消息。重复运行同一源文件返回 `already_imported`。
+5. Echo 材料中的可复用跨群本人记忆只导入锁定的四条事实；时效已过的“今晚/明天”仅保留为历史 background。第 619–623 行合并为一个未确认微信 draft，不写为 sent。
+6. `correct-inferred-sent` 对 `#1210` 至 `#1221` 只追加 correction，声明自动推断无效且实际发送状态未知。recent context 排除这些被失效的 sent，但旧事件和 correction 都保留在审计链。
+7. schema、correction、导入、profile session 轮换和 Gateway 重启是彼此独立的副作用步骤，必须分别授权；任何 SHA、人物或 transcript 条件失败都不得继续。
+
+## 15. 已绑定群按需公网搜索
 
 **入口**：`relationship_web_search`
 **成功结果**：只把匿名化后的最小公共查询发给 DDGS，并把有来源的临时结果返回当前会话

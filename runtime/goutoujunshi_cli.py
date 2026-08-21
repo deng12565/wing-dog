@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -26,6 +27,7 @@ from goutoujunshi.repository import (
     USER_MEMORY_CATEGORIES,
     USER_MEMORY_LIFESPANS,
     correct_user_memory,
+    correct_inferred_sent_events,
     finish_control_requests,
     forget_user_memory,
     health,
@@ -36,6 +38,15 @@ from goutoujunshi.repository import (
     remember_user_memory,
     resolve_draft,
     unresolved_drafts,
+)
+from goutoujunshi.structured_import import (
+    build_echo_manifest,
+    build_wechat_archive_manifest,
+    canonical_manifest_bytes,
+    import_structured_file,
+    preflight_structured_file,
+    resolve_unique_active_person,
+    sha256_bytes as structured_sha256_bytes,
 )
 
 
@@ -55,7 +66,7 @@ def command_health(_: argparse.Namespace) -> None:
 
 def command_init(_: argparse.Namespace) -> None:
     apply_schema()
-    emit({"ok": True, "schema_version": 5})
+    emit({"ok": True, "schema_version": 6})
 
 
 def command_migration_fingerprint(_: argparse.Namespace) -> None:
@@ -143,6 +154,168 @@ def _archive_source(path: Path, archive_root: Path) -> tuple[Path, str]:
         hash_path.write_text(f"{digest}\n", encoding="ascii")
         os.chmod(hash_path, stat.S_IREAD)
     return target, digest
+
+
+def _write_bytes_no_replace(path: Path, data: bytes, *, mode: int) -> str:
+    """Publish complete bytes atomically and never replace an existing file."""
+    path = path.resolve()
+    digest = hashlib.sha256(data).hexdigest()
+    if path.exists():
+        if not path.is_file() or path.is_symlink():
+            raise RuntimeError(f"immutable target is not a regular file: {path}")
+        if structured_sha256_bytes(path.read_bytes()) != digest:
+            raise FileExistsError(f"immutable target already exists with different content: {path}")
+        os.chmod(path, mode)
+        return "already_exists"
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.parent / f".{path.name}.tmp-{os.getpid()}-{os.urandom(6).hex()}"
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, mode)
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if structured_sha256_bytes(path.read_bytes()) != digest:
+                raise FileExistsError(
+                    f"immutable target appeared with different content: {path}"
+                )
+        os.chmod(path, mode)
+        return "created"
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _archive_immutable_file(path: Path, archive_root: Path) -> tuple[Path, str, str]:
+    source = path.resolve()
+    if not source.is_file() or source.is_symlink():
+        raise ValueError(f"archive source must be a regular file: {source}")
+    data = source.read_bytes()
+    digest = structured_sha256_bytes(data)
+    root = archive_root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    os.chmod(root, 0o700)
+    target = root / f"{digest}-{source.name}"
+    status = _write_bytes_no_replace(target, data, mode=0o400)
+    sidecar = target.with_name(target.name + ".sha256")
+    _write_bytes_no_replace(sidecar, f"{digest}  {target.name}\n".encode("ascii"), mode=0o400)
+    return target, digest, status
+
+
+def command_build_echo_manifest(args: argparse.Namespace) -> None:
+    source = Path(args.source).resolve()
+    output = Path(args.output).resolve()
+    manifest = build_echo_manifest(source)
+    content = canonical_manifest_bytes(manifest)
+    status = _write_bytes_no_replace(output, content, mode=0o600)
+    emit(
+        {
+            "ok": True,
+            "status": status,
+            "output": str(output),
+            "source_sha256": manifest["source"]["sha256"],
+            "manifest_sha256": structured_sha256_bytes(content),
+            "events": len(manifest["events"]),
+            "memories": len(manifest["user_memories"]),
+        }
+    )
+
+
+def command_build_wechat_manifest(args: argparse.Namespace) -> None:
+    source = Path(args.source).resolve()
+    output = Path(args.output).resolve()
+    manifest = build_wechat_archive_manifest(
+        source,
+        self_author=args.self_author,
+        person_aliases=args.person_alias,
+    )
+    content = canonical_manifest_bytes(manifest)
+    status = _write_bytes_no_replace(output, content, mode=0o600)
+    counts: dict[str, int] = {}
+    for event in manifest["events"]:
+        event_type = str(event["event_type"])
+        counts[event_type] = counts.get(event_type, 0) + 1
+    emit(
+        {
+            "ok": True,
+            "status": status,
+            "output": str(output),
+            "source_sha256": manifest["source"]["sha256"],
+            "manifest_sha256": structured_sha256_bytes(content),
+            "events": len(manifest["events"]),
+            "event_types": counts,
+            "memories": len(manifest["user_memories"]),
+        }
+    )
+
+
+def command_resolve_unique_person(args: argparse.Namespace) -> None:
+    profile = resolve_unique_active_person(args.owner, args.alias)
+    emit(
+        {
+            "ok": True,
+            "relationship": {
+                key: profile[key]
+                for key in ("id", "slug", "display_name", "status", "current_channel")
+            },
+        }
+    )
+
+
+def command_import_structured(args: argparse.Namespace) -> None:
+    source = Path(args.source).resolve()
+    manifest = Path(args.manifest).resolve()
+    preflight = preflight_structured_file(
+        source,
+        manifest,
+        owner_key=args.owner,
+    )
+    archive_root = Path(args.archive_root).resolve()
+    archived_source, source_sha, source_archive_status = _archive_immutable_file(
+        source, archive_root
+    )
+    archived_manifest, manifest_sha, manifest_archive_status = _archive_immutable_file(
+        manifest, archive_root
+    )
+    if (
+        preflight["source_sha256"] != source_sha
+        or preflight["manifest_sha256"] != manifest_sha
+    ):
+        raise RuntimeError("structured import inputs changed after preflight")
+    result = import_structured_file(
+        archived_source,
+        archived_manifest,
+        owner_key=args.owner,
+    )
+    if result["source_sha256"] != source_sha or result["manifest_sha256"] != manifest_sha:
+        raise RuntimeError("archived structured import changed during validation")
+    if result["relationship_id"] != preflight["relationship_id"]:
+        raise RuntimeError("structured import person changed after preflight")
+    result.update(
+        {
+            "ok": True,
+            "source_archive": str(archived_source),
+            "manifest_archive": str(archived_manifest),
+            "source_archive_status": source_archive_status,
+            "manifest_archive_status": manifest_archive_status,
+            "export_jobs": process_export_jobs(limit=25),
+        }
+    )
+    emit(result)
+
+
+def command_correct_inferred_sent(args: argparse.Namespace) -> None:
+    result = correct_inferred_sent_events(
+        args.relationship_id,
+        args.event_id,
+        source_ref=args.source_ref,
+    )
+    result.update({"ok": True, "export_jobs": process_export_jobs(limit=25)})
+    emit(result)
 
 
 def command_import(args: argparse.Namespace) -> None:
@@ -324,6 +497,31 @@ def parser() -> argparse.ArgumentParser:
     evidence.add_argument("--archive-root", required=True)
     evidence.add_argument("--source-ref", default="")
     evidence.set_defaults(func=command_import_evidence)
+    echo_manifest = sub.add_parser("build-echo-manifest")
+    echo_manifest.add_argument("--source", required=True)
+    echo_manifest.add_argument("--output", required=True)
+    echo_manifest.set_defaults(func=command_build_echo_manifest)
+    wechat_manifest = sub.add_parser("build-wechat-manifest")
+    wechat_manifest.add_argument("--source", required=True)
+    wechat_manifest.add_argument("--output", required=True)
+    wechat_manifest.add_argument("--self-author", required=True)
+    wechat_manifest.add_argument("--person-alias", action="append", required=True)
+    wechat_manifest.set_defaults(func=command_build_wechat_manifest)
+    resolve_person = sub.add_parser("resolve-unique-person")
+    resolve_person.add_argument("--owner", required=True)
+    resolve_person.add_argument("--alias", action="append", required=True)
+    resolve_person.set_defaults(func=command_resolve_unique_person)
+    structured = sub.add_parser("import-structured")
+    structured.add_argument("--source", required=True)
+    structured.add_argument("--manifest", required=True)
+    structured.add_argument("--owner", required=True)
+    structured.add_argument("--archive-root", required=True)
+    structured.set_defaults(func=command_import_structured)
+    inferred_sent = sub.add_parser("correct-inferred-sent")
+    inferred_sent.add_argument("--relationship-id", required=True, type=int)
+    inferred_sent.add_argument("--event-id", action="append", required=True, type=int)
+    inferred_sent.add_argument("--source-ref", required=True)
+    inferred_sent.set_defaults(func=command_correct_inferred_sent)
     exp = sub.add_parser("export")
     exp.add_argument("relationship_id", type=int)
     exp.set_defaults(func=command_export)

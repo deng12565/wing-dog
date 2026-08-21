@@ -1,5 +1,7 @@
 import asyncio
+import hashlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,28 +15,63 @@ from runtime import bootstrap
 
 class BootstrapConfigTests(unittest.TestCase):
     @staticmethod
-    def _vision_patch_fixture(root: Path) -> tuple[Path, Path, str, str]:
+    def _runtime_patch_fixture(root: Path):
         agent_root = root / "hermes-agent"
         backup_dir = root / "backups"
-        (agent_root / "gateway").mkdir(parents=True)
-        (agent_root / "hermes_cli").mkdir()
+        (agent_root / "hermes_cli").mkdir(parents=True)
         (agent_root / "hermes_cli" / "__init__.py").write_text(
             '__version__ = "test-version"\n', encoding="utf-8"
         )
-        source = '''class Runner:
-    async def enrich(self, user_text, image_paths):
-        enriched_parts = []
-        for path in image_paths:
-            enriched_parts.append(path)
-        # Combine: vision descriptions first, then the user's original text
-        return user_text
-'''
-        target = agent_root / "gateway" / "run.py"
-        target.write_text(source, encoding="utf-8", newline="\n")
-        original_sha = bootstrap.hashlib.sha256(source.encode("utf-8")).hexdigest()
-        patched = bootstrap._patch_hermes_vision_source(source).encode("utf-8")
-        patched_sha = bootstrap.hashlib.sha256(patched).hexdigest()
-        return agent_root, backup_dir, original_sha, patched_sha
+        transforms = {}
+        expected = {}
+        for relative_path in bootstrap.HERMES_RUNTIME_PATCH_TRANSFORMS:
+            target = agent_root / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            source = f"source:{relative_path}\n"
+            suffix = f"patched:{relative_path}\n"
+            target.write_text(source, encoding="utf-8", newline="\n")
+            transforms[relative_path] = lambda value, suffix=suffix: value + suffix
+            expected[relative_path] = {
+                "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                "patched_sha256": hashlib.sha256((source + suffix).encode("utf-8")).hexdigest(),
+            }
+        return agent_root, backup_dir, expected, transforms
+
+    @staticmethod
+    def _runtime_probe() -> dict[str, object]:
+        return {
+            "plugin_discovered": True,
+            "plugin_error": "",
+            "tools": sorted(
+                [
+                    "relationship_commit_turn",
+                    "relationship_search_events",
+                    "relationship_web_search",
+                    "user_memory_remember",
+                    "user_memory_correct",
+                    "user_memory_forget",
+                ]
+            ),
+            "tool_schema_sha256": "1" * 64,
+            "relationship_toolset": sorted(
+                [
+                    "relationship_commit_turn",
+                    "relationship_search_events",
+                    "relationship_web_search",
+                ]
+            ),
+            "user_toolset": sorted(
+                ["user_memory_remember", "user_memory_correct", "user_memory_forget"]
+            ),
+            "skill_loaded": True,
+        }
+
+    @staticmethod
+    def _install_verification_packages(global_home: Path, profile_home: Path) -> None:
+        project = Path(__file__).resolve().parents[2]
+        for home in (global_home, profile_home):
+            bootstrap.install_skill_package(project, home)
+            bootstrap.install_plugin_package(project / "runtime" / "goutoujunshi", home)
 
     def test_global_config_enables_owner_only_unmentioned_user_memory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -148,6 +185,7 @@ class BootstrapConfigTests(unittest.TestCase):
                 config["agent"]["disabled_toolsets"], bootstrap.PROFILE_DISABLED_TOOLSETS
             )
             self.assertEqual(config["web"]["search_backend"], "ddgs")
+            self.assertFalse(config["onboarding"]["first_message_intro"])
             self.assertEqual(config["plugins"]["enabled"], ["goutoujunshi"])
             self.assertEqual(
                 config["known_plugin_toolsets"]["feishu"],
@@ -169,6 +207,7 @@ class BootstrapConfigTests(unittest.TestCase):
             self.assertEqual(profile_values["GOUTOUJUNSHI_TOKEN_SECRET"], "legacy-value-kept")
             self.assertEqual(profile_values["CUSTOM_PROFILE_VALUE"], "kept")
             self.assertEqual(profile_values["WEB_TOOLS_DEBUG"], "false")
+            self.assertEqual(os.stat(profile_home / ".env").st_mode & 0o777, 0o600)
 
     def test_verify_reports_the_restricted_ddgs_profile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -190,6 +229,7 @@ class BootstrapConfigTests(unittest.TestCase):
             bootstrap.command_configure_profile(
                 SimpleNamespace(profile_home=str(profile_home), global_env=str(env_path))
             )
+            self._install_verification_packages(root, profile_home)
 
             resolved = [
                 ["goutoujunshi-user"],
@@ -198,6 +238,8 @@ class BootstrapConfigTests(unittest.TestCase):
             with patch.object(
                 bootstrap, "_resolved_hermes_toolsets", side_effect=resolved
             ), patch.object(bootstrap, "_ddgs_importable", return_value=True), patch.object(
+                bootstrap, "_profile_runtime_probe", return_value=self._runtime_probe()
+            ), patch.object(
                 bootstrap, "emit"
             ) as emit:
                 bootstrap.command_verify(
@@ -225,6 +267,8 @@ class BootstrapConfigTests(unittest.TestCase):
             self.assertEqual(result["profile"]["search_backend"], "ddgs")
             self.assertTrue(result["profile"]["ddgs_importable"])
             self.assertEqual(result["profile"]["web_tools_debug"], "false")
+            self.assertTrue(result["global"]["runtime_probe"]["plugin_discovered"])
+            self.assertTrue(result["global"]["runtime_probe"]["skill_loaded"])
             self.assertEqual(result["profile"]["plugins_enabled"], ["goutoujunshi"])
 
     def test_verify_rejects_native_web_exposure_and_bad_profile_search_settings(self) -> None:
@@ -249,6 +293,7 @@ class BootstrapConfigTests(unittest.TestCase):
             bootstrap.command_configure_profile(
                 SimpleNamespace(profile_home=str(profile_home), global_env=str(env_path))
             )
+            self._install_verification_packages(root, profile_home)
             base_global = config_path.read_text(encoding="utf-8")
             base_profile = profile_config_path.read_text(encoding="utf-8")
             base_profile_env = profile_env_path.read_text(encoding="utf-8")
@@ -262,6 +307,8 @@ class BootstrapConfigTests(unittest.TestCase):
                 "resolved-toolset-leak",
                 "ddgs-not-importable",
                 "plugin-disabled",
+                "profile-package-missing",
+                "plugin-discovery-missing",
             ):
                 with self.subTest(case=case):
                     config_path.write_text(base_global, encoding="utf-8")
@@ -305,12 +352,35 @@ class BootstrapConfigTests(unittest.TestCase):
                         else ["goutoujunshi-user"],
                         ["goutoujunshi", "goutoujunshi-user"],
                     ]
+                    packages = {
+                        scope: {
+                            "skill_matches": True,
+                            "plugin_matches": True,
+                            "skill_files": 1,
+                            "plugin_files": 1,
+                        }
+                        for scope in ("global", "profile")
+                    }
+                    if case == "profile-package-missing":
+                        packages["profile"]["plugin_matches"] = False
+                    global_probe = self._runtime_probe()
+                    profile_probe = self._runtime_probe()
+                    if case == "plugin-discovery-missing":
+                        profile_probe["plugin_discovered"] = False
                     with patch.object(
                         bootstrap, "_resolved_hermes_toolsets", side_effect=resolved
                     ), patch.object(
                         bootstrap,
                         "_ddgs_importable",
                         return_value=case != "ddgs-not-importable",
+                    ), patch.object(
+                        bootstrap,
+                        "_installed_runtime_packages",
+                        return_value=packages,
+                    ), patch.object(
+                        bootstrap,
+                        "_profile_runtime_probe",
+                        side_effect=[global_probe, profile_probe],
                     ), patch.object(bootstrap, "emit"):
                         with self.assertRaises(SystemExit) as error:
                             bootstrap.command_verify(
@@ -335,6 +405,11 @@ class BootstrapConfigTests(unittest.TestCase):
         self.assertIn("$env:TEMP = $HermesInstallTemp", script)
         self.assertIn("$env:TMP = $HermesInstallTemp", script)
         self.assertIn("$Python -c 'import ddgs'", script)
+        self.assertEqual(script.count("$Python $Bootstrap install-plugin"), 2)
+        self.assertEqual(script.count("$Python $Bootstrap install-skill"), 2)
+        self.assertIn("install-plugin --plugin-source (Join-Path $RuntimeRoot 'goutoujunshi') --target-home $ProfileHome", script)
+        self.assertIn("install-hermes-runtime-patch", script)
+        self.assertNotIn("install-hermes-vision-patch", script)
         self.assertIn("--profile-env (Join-Path $ProfileHome '.env')", script)
         self.assertNotRegex(script.lower(), r"pip\s+install[^\r\n]*ddgs")
 
@@ -391,7 +466,7 @@ class BootstrapConfigTests(unittest.TestCase):
         manifest_path = Path(__file__).parents[1] / "goutoujunshi" / "plugin.yaml"
         manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
 
-        self.assertEqual(manifest["version"], "1.7.0")
+        self.assertEqual(manifest["version"], "1.8.0")
         self.assertNotIn(
             "GOUTOUJUNSHI_TOKEN_SECRET",
             manifest.get("requires_env", []),
@@ -422,77 +497,353 @@ class BootstrapConfigTests(unittest.TestCase):
 
             self.assertEqual((target / "__init__.py").read_text(encoding="utf-8"), "VERSION = 1\n")
 
-    def test_hermes_vision_patch_is_guarded_atomic_and_idempotent(self) -> None:
+    def test_hermes_runtime_patch_is_guarded_atomic_and_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            agent_root, backup_dir, original_sha, patched_sha = self._vision_patch_fixture(
+            agent_root, backup_dir, expected, transforms = self._runtime_patch_fixture(
                 Path(directory)
             )
-
-            result = bootstrap.install_hermes_vision_patch(
-                agent_root,
-                backup_dir,
-                expected_version="test-version",
-                expected_sha256=original_sha,
-                expected_patched_sha256=patched_sha,
-            )
-            repeated = bootstrap.install_hermes_vision_patch(
-                agent_root,
-                backup_dir,
-                expected_version="test-version",
-                expected_sha256=original_sha,
-                expected_patched_sha256=patched_sha,
-            )
-
-            installed = (agent_root / "gateway" / "run.py").read_text(encoding="utf-8")
-            self.assertEqual(result["status"], "patched")
-            self.assertEqual(repeated["status"], "already_patched")
-            self.assertIn("asyncio.Semaphore(concurrency)", installed)
-            self.assertNotIn("image_url: {path}", installed)
-            self.assertEqual(len(list(backup_dir.glob("gateway-run.py.*.bak"))), 1)
-
-    def test_hermes_vision_patch_refuses_unknown_source(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            agent_root, backup_dir, _, patched_sha = self._vision_patch_fixture(Path(directory))
-            target = agent_root / "gateway" / "run.py"
-            original = target.read_bytes()
-
-            with self.assertRaises(RuntimeError):
-                bootstrap.install_hermes_vision_patch(
+            with patch.dict(bootstrap.HERMES_RUNTIME_PATCH_TRANSFORMS, transforms, clear=True):
+                result = bootstrap.install_hermes_runtime_patch(
                     agent_root,
                     backup_dir,
                     expected_version="test-version",
-                    expected_sha256="0" * 64,
-                    expected_patched_sha256=patched_sha,
+                    expected_files=expected,
+                )
+                repeated = bootstrap.install_hermes_runtime_patch(
+                    agent_root,
+                    backup_dir,
+                    expected_version="test-version",
+                    expected_files=expected,
                 )
 
-            self.assertEqual(target.read_bytes(), original)
+            self.assertEqual(result["status"], "patched")
+            self.assertEqual(repeated["status"], "already_patched")
+            self.assertEqual(len(list(backup_dir.glob("*.bak"))), 4)
+            for relative_path, hashes in expected.items():
+                self.assertEqual(
+                    bootstrap._sha256_file(agent_root / relative_path),
+                    hashes["patched_sha256"],
+                )
 
-    def test_hermes_vision_patch_restores_source_when_final_check_fails(self) -> None:
+    def test_hermes_runtime_patch_refuses_unknown_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            agent_root, backup_dir, original_sha, patched_sha = self._vision_patch_fixture(
+            agent_root, backup_dir, expected, transforms = self._runtime_patch_fixture(
                 Path(directory)
             )
             target = agent_root / "gateway" / "run.py"
             original = target.read_bytes()
+            expected["gateway/run.py"]["source_sha256"] = "0" * 64
+
+            with patch.dict(bootstrap.HERMES_RUNTIME_PATCH_TRANSFORMS, transforms, clear=True):
+                with self.assertRaises(RuntimeError):
+                    bootstrap.install_hermes_runtime_patch(
+                        agent_root,
+                        backup_dir,
+                        expected_version="test-version",
+                        expected_files=expected,
+                    )
+
+            self.assertEqual(target.read_bytes(), original)
+
+    def test_hermes_runtime_patch_restores_all_sources_when_final_check_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent_root, backup_dir, expected, transforms = self._runtime_patch_fixture(
+                Path(directory)
+            )
+            target = agent_root / "gateway" / "run.py"
+            originals = {
+                relative_path: (agent_root / relative_path).read_bytes()
+                for relative_path in expected
+            }
             real_sha = bootstrap._sha256_file
 
             def fail_installed_verification(path: Path) -> str:
                 digest = real_sha(path)
-                if path.resolve() == target.resolve() and digest == patched_sha:
+                if (
+                    path.resolve() == target.resolve()
+                    and digest == expected["gateway/run.py"]["patched_sha256"]
+                ):
                     return "f" * 64
                 return digest
 
-            with patch.object(bootstrap, "_sha256_file", side_effect=fail_installed_verification):
+            with patch.dict(
+                bootstrap.HERMES_RUNTIME_PATCH_TRANSFORMS, transforms, clear=True
+            ), patch.object(
+                bootstrap, "_sha256_file", side_effect=fail_installed_verification
+            ):
                 with self.assertRaises(RuntimeError):
-                    bootstrap.install_hermes_vision_patch(
+                    bootstrap.install_hermes_runtime_patch(
                         agent_root,
                         backup_dir,
                         expected_version="test-version",
-                        expected_sha256=original_sha,
-                        expected_patched_sha256=patched_sha,
+                        expected_files=expected,
                     )
 
-            self.assertEqual(target.read_bytes(), original)
+            for relative_path, original in originals.items():
+                self.assertEqual((agent_root / relative_path).read_bytes(), original)
+
+    def test_profile_session_rotation_preserves_transcripts_and_removes_only_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agent_root = root / "agent"
+            global_home = root / "home"
+            profile_home = global_home / "profiles" / "goutoujunshi"
+            (agent_root / "gateway").mkdir(parents=True)
+            (agent_root / "hermes_cli").mkdir()
+            profile_home.mkdir(parents=True)
+            (agent_root / "hermes_cli" / "__init__.py").write_text(
+                f'__version__ = "{bootstrap.HERMES_RUNTIME_PATCH_VERSION}"\n',
+                encoding="utf-8",
+            )
+            session_source = b"locked session source\n"
+            (agent_root / "gateway" / "session.py").write_bytes(session_source)
+            for home in (global_home, profile_home):
+                (home / "state.db").touch()
+                (home / "sessions").mkdir(exist_ok=True)
+
+            scope = str((global_home / "sessions").resolve())
+            relation_global = "agent:goutoujunshi:feishu:group:chat-1:user-1"
+            relation_profile = "agent:goutoujunshi:feishu:group:chat-2:user-1"
+            unrelated = "agent:main:feishu:group:chat-other:user-1"
+
+            class FakeEntry:
+                @classmethod
+                def from_dict(cls, data):
+                    return SimpleNamespace(session_id=data["session_id"])
+
+            class FakeDB:
+                stores = {
+                    global_home / "state.db": {
+                        "routing": {
+                            scope: {
+                                relation_global: json.dumps({"session_id": "old-global"}),
+                                unrelated: json.dumps({"session_id": "keep-global"}),
+                            }
+                        },
+                        "sessions": {
+                            "old-global": {"end_reason": None},
+                            "keep-global": {"end_reason": None},
+                        },
+                    },
+                    profile_home / "state.db": {
+                        "routing": {
+                            scope: {
+                                relation_profile: json.dumps({"session_id": "old-profile"})
+                            }
+                        },
+                        "sessions": {"old-profile": {"end_reason": "agent_close"}},
+                    },
+                }
+
+                def __init__(self, db_path):
+                    self.data = self.stores[Path(db_path)]
+
+                def load_gateway_routing_entries(self, *, scope=""):
+                    return dict(self.data["routing"].get(scope, {}))
+
+                def delete_gateway_routing_entries(self, keys, *, scope=""):
+                    for key in keys:
+                        self.data["routing"].setdefault(scope, {}).pop(key, None)
+
+                def get_session(self, session_id):
+                    row = self.data["sessions"].get(session_id)
+                    return dict(row) if row is not None else None
+
+                def promote_to_session_reset(self, session_id, reason):
+                    row = self.data["sessions"].get(session_id)
+                    if row is None:
+                        return False
+                    if row["end_reason"] in (None, "agent_close", "ws_orphan_reap"):
+                        row["end_reason"] = reason
+                        return True
+                    return False
+
+                def close(self):
+                    return None
+
+            (global_home / "sessions" / "sessions.json").write_text(
+                json.dumps(
+                    {
+                        "_README": "keep",
+                        relation_global: {"session_id": "old-global"},
+                        unrelated: {"session_id": "keep-global"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            digest = hashlib.sha256(session_source).hexdigest()
+            result = bootstrap.rotate_profile_sessions(
+                agent_root,
+                global_home,
+                profile_home,
+                expected_session_sha256=digest,
+                session_db_class=FakeDB,
+                session_entry_class=FakeEntry,
+            )
+            repeated = bootstrap.rotate_profile_sessions(
+                agent_root,
+                global_home,
+                profile_home,
+                expected_session_sha256=digest,
+                session_db_class=FakeDB,
+                session_entry_class=FakeEntry,
+            )
+
+            self.assertEqual(result["ended_sessions"], 2)
+            self.assertEqual(result["removed_routes"], 2)
+            self.assertEqual(repeated["ended_sessions"], 0)
+            self.assertEqual(
+                FakeDB.stores[global_home / "state.db"]["sessions"]["old-global"]["end_reason"],
+                bootstrap.PROFILE_SESSION_MIGRATION_REASON,
+            )
+            self.assertEqual(
+                FakeDB.stores[profile_home / "state.db"]["sessions"]["old-profile"]["end_reason"],
+                bootstrap.PROFILE_SESSION_MIGRATION_REASON,
+            )
+            self.assertIn(
+                unrelated,
+                FakeDB.stores[global_home / "state.db"]["routing"][scope],
+            )
+            mirror = json.loads(
+                (global_home / "sessions" / "sessions.json").read_text(encoding="utf-8")
+            )
+            self.assertNotIn(relation_global, mirror)
+            self.assertIn(unrelated, mirror)
+            self.assertEqual(
+                os.stat(global_home / "sessions" / "sessions.json").st_mode & 0o777,
+                0o600,
+            )
+
+    def test_profile_session_rotation_refuses_a_running_gateway(self) -> None:
+        with patch.object(
+            bootstrap, "_hermes_version", return_value=bootstrap.HERMES_RUNTIME_PATCH_VERSION
+        ), patch.object(
+            bootstrap, "_sha256_file", return_value=bootstrap.HERMES_SESSION_SHA256
+        ), patch.object(bootstrap, "_running_pid_from_file", return_value=1234):
+            with self.assertRaisesRegex(RuntimeError, "still running"):
+                bootstrap.rotate_profile_sessions(
+                    Path("/missing-agent"),
+                    Path("/missing-home"),
+                    Path("/missing-home/profiles/goutoujunshi"),
+                )
+
+    def test_profile_session_rotation_keeps_mirror_route_when_promotion_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agent_root = root / "agent"
+            global_home = root / "home"
+            profile_home = global_home / "profiles" / "goutoujunshi"
+            (agent_root / "gateway").mkdir(parents=True)
+            (agent_root / "hermes_cli").mkdir()
+            (global_home / "sessions").mkdir(parents=True)
+            profile_home.mkdir(parents=True)
+            (global_home / "state.db").touch()
+            (agent_root / "hermes_cli" / "__init__.py").write_text(
+                f'__version__ = "{bootstrap.HERMES_RUNTIME_PATCH_VERSION}"\n',
+                encoding="utf-8",
+            )
+            session_source = b"locked session source\n"
+            (agent_root / "gateway" / "session.py").write_bytes(session_source)
+            relation_key = "agent:goutoujunshi:feishu:group:chat-1:user-1"
+            sessions_file = global_home / "sessions" / "sessions.json"
+            sessions_file.write_text(
+                json.dumps({relation_key: {"session_id": "mirror-only"}}),
+                encoding="utf-8",
+            )
+
+            class FakeEntry:
+                @classmethod
+                def from_dict(cls, data):
+                    return SimpleNamespace(session_id=data["session_id"])
+
+            class FailingDB:
+                def __init__(self, db_path):
+                    self.db_path = Path(db_path)
+
+                def load_gateway_routing_entries(self, *, scope=""):
+                    return {}
+
+                def delete_gateway_routing_entries(self, keys, *, scope=""):
+                    raise AssertionError("no database route should be removed")
+
+                def get_session(self, session_id):
+                    return {"end_reason": None}
+
+                def promote_to_session_reset(self, session_id, reason):
+                    return False
+
+                def close(self):
+                    return None
+
+            with self.assertRaisesRegex(RuntimeError, "failed to end Hermes profile session"):
+                bootstrap.rotate_profile_sessions(
+                    agent_root,
+                    global_home,
+                    profile_home,
+                    expected_session_sha256=hashlib.sha256(session_source).hexdigest(),
+                    session_db_class=FailingDB,
+                    session_entry_class=FakeEntry,
+                )
+
+            mirror = json.loads(sessions_file.read_text(encoding="utf-8"))
+            self.assertIn(relation_key, mirror)
+
+    def test_profile_session_rotation_keeps_database_route_when_transcript_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agent_root = root / "agent"
+            global_home = root / "home"
+            profile_home = global_home / "profiles" / "goutoujunshi"
+            (agent_root / "gateway").mkdir(parents=True)
+            (agent_root / "hermes_cli").mkdir()
+            profile_home.mkdir(parents=True)
+            (global_home / "state.db").touch()
+            (agent_root / "hermes_cli" / "__init__.py").write_text(
+                f'__version__ = "{bootstrap.HERMES_RUNTIME_PATCH_VERSION}"\n',
+                encoding="utf-8",
+            )
+            session_source = b"locked session source\n"
+            (agent_root / "gateway" / "session.py").write_bytes(session_source)
+            relation_key = "agent:goutoujunshi:feishu:group:chat-1:user-1"
+
+            class FakeEntry:
+                @classmethod
+                def from_dict(cls, data):
+                    return SimpleNamespace(session_id=data["session_id"])
+
+            class MissingTranscriptDB:
+                routes = {relation_key: json.dumps({"session_id": "missing"})}
+
+                def __init__(self, db_path):
+                    self.db_path = Path(db_path)
+
+                def load_gateway_routing_entries(self, *, scope=""):
+                    return dict(self.routes) if not scope else {}
+
+                def delete_gateway_routing_entries(self, keys, *, scope=""):
+                    for key in keys:
+                        self.routes.pop(key, None)
+
+                def get_session(self, session_id):
+                    return None
+
+                def promote_to_session_reset(self, session_id, reason):
+                    raise AssertionError("a missing transcript must not be promoted")
+
+                def close(self):
+                    return None
+
+            with self.assertRaisesRegex(RuntimeError, "transcript is missing"):
+                bootstrap.rotate_profile_sessions(
+                    agent_root,
+                    global_home,
+                    profile_home,
+                    expected_session_sha256=hashlib.sha256(session_source).hexdigest(),
+                    session_db_class=MissingTranscriptDB,
+                    session_entry_class=FakeEntry,
+                )
+
+            self.assertIn(relation_key, MissingTranscriptDB.routes)
 
     def test_hermes_vision_patch_bounds_concurrency_and_preserves_order(self) -> None:
         source = '''import asyncio

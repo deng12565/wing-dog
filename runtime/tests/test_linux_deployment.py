@@ -19,6 +19,24 @@ SPEC.loader.exec_module(supervisor)
 
 
 class LinuxDeploymentTests(unittest.TestCase):
+    def test_bootstrap_installs_both_packages_in_both_homes_and_tightens_permissions(self) -> None:
+        bootstrap = (PROJECT / "deployment" / "linux" / "bootstrap.sh").read_text(
+            encoding="utf-8"
+        )
+        dockerfile = (PROJECT / "deployment" / "linux" / "Dockerfile").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(bootstrap.count(" install-plugin \\\n"), 2)
+        self.assertEqual(bootstrap.count(" install-skill \\\n"), 2)
+        self.assertIn('--target-home "$hermes_home"', bootstrap)
+        self.assertIn('--target-home "$profile_home"', bootstrap)
+        self.assertIn('chmod 600 "$hermes_home/.env" "$profile_home/.env"', bootstrap)
+        self.assertIn('chmod 700 "$log_home/logs"', bootstrap)
+        self.assertIn("-type f -exec chmod 600", bootstrap)
+        self.assertIn("install-hermes-runtime-patch", dockerfile)
+        self.assertNotIn("install-hermes-vision-patch", dockerfile)
+
     def test_compose_has_isolated_database_and_no_public_ports_or_docker_socket(self) -> None:
         compose_path = PROJECT / "deployment" / "linux" / "compose.yaml"
         raw = compose_path.read_text(encoding="utf-8")

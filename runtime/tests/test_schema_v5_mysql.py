@@ -3,18 +3,21 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 
 RUNTIME = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RUNTIME))
+from goutoujunshi import database as relationship_database  # noqa: E402
 
 
 @unittest.skipUnless(
-    os.environ.get("GOUTOUJUNSHI_RUN_SCHEMA_V5_TEST") == "1",
-    "requires an explicitly authorized disposable MySQL schema",
+    os.environ.get("GOUTOUJUNSHI_RUN_SCHEMA_V6_TEST") == "1",
+    "requires an explicitly authorized disposable MySQL schema v6 replay",
 )
-class SchemaV5MySqlIntegrationTests(unittest.TestCase):
+class SchemaV6MySqlIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         try:
@@ -67,9 +70,18 @@ class SchemaV5MySqlIntegrationTests(unittest.TestCase):
         self._clear_tables()
 
     def _apply_schema(self) -> None:
-        sql = (RUNTIME / "goutoujunshi" / "schema.sql").read_text(encoding="utf-8")
-        statements = [item.strip() for item in sql.split(";") if item.strip()]
-        self._apply_statements(statements)
+        @contextmanager
+        def use_disposable_schema():
+            try:
+                with self.connection.cursor() as cursor:
+                    yield cursor
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
+
+        with patch.object(relationship_database, "transaction", use_disposable_schema):
+            relationship_database.apply_schema()
 
     def _apply_statements(self, statements: list[str]) -> None:
         with self.connection.cursor() as cursor:
@@ -87,6 +99,7 @@ class SchemaV5MySqlIntegrationTests(unittest.TestCase):
             "DROP TABLE IF EXISTS relationship_event_index_jobs",
             "DROP TABLE IF EXISTS relationship_search_indexes",
             "VALUES (5, 'replace vector search with enriched MySQL fulltext documents')",
+            "VALUES (6, 'structured imports and append-only inferred-sent recovery')",
         )
         statements = [
             item.strip()
@@ -94,6 +107,12 @@ class SchemaV5MySqlIntegrationTests(unittest.TestCase):
             if item.strip() and not any(marker in item for marker in excluded)
         ]
         self._apply_statements(statements)
+        self._apply_statements(
+            [
+                "ALTER TABLE import_manifests DROP COLUMN manifest_content",
+                "ALTER TABLE import_manifests DROP COLUMN manifest_sha256",
+            ]
+        )
         self._apply_statements(
             [
                 """
@@ -132,10 +151,26 @@ class SchemaV5MySqlIntegrationTests(unittest.TestCase):
             ]
         )
 
-    def _assert_v5_structure(self) -> None:
+    def _assert_v6_structure(self) -> None:
         with self.connection.cursor() as cursor:
             cursor.execute("SELECT version FROM schema_migrations ORDER BY version")
-            self.assertEqual([int(row["version"]) for row in cursor.fetchall()], [1, 2, 3, 4, 5])
+            self.assertEqual(
+                [int(row["version"]) for row in cursor.fetchall()],
+                [1, 2, 3, 4, 5, 6],
+            )
+            cursor.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema=%s AND table_name='import_manifests'
+                  AND column_name IN ('manifest_sha256','manifest_content')
+                ORDER BY column_name
+                """,
+                (self.database,),
+            )
+            self.assertEqual(
+                [row["COLUMN_NAME"] for row in cursor.fetchall()],
+                ["manifest_content", "manifest_sha256"],
+            )
             cursor.execute(
                 """
                 SELECT table_name FROM information_schema.tables
@@ -166,12 +201,12 @@ class SchemaV5MySqlIntegrationTests(unittest.TestCase):
                 ["ft_search_document_enrichment", "ft_search_document_source"],
             )
 
-    def test_schema_v5_applies_twice_without_duplicate_rows_or_indexes(self) -> None:
+    def test_schema_v6_applies_twice_without_duplicate_rows_or_indexes(self) -> None:
         self._apply_schema()
         self._apply_schema()
-        self._assert_v5_structure()
+        self._assert_v6_structure()
 
-    def test_schema_v5_migrates_v4_history_and_is_idempotent(self) -> None:
+    def test_schema_v6_migrates_v4_history_and_is_idempotent(self) -> None:
         self._apply_v4_fixture()
         self._apply_schema()
         with self.connection.cursor() as cursor:
@@ -199,7 +234,7 @@ class SchemaV5MySqlIntegrationTests(unittest.TestCase):
                 [(1, "pending", 0), (2, "pending", 0)],
             )
         self._apply_schema()
-        self._assert_v5_structure()
+        self._assert_v6_structure()
         with self.connection.cursor() as cursor:
             cursor.execute("SELECT COUNT(*) AS count FROM relationship_event_search_documents")
             self.assertEqual(int(cursor.fetchone()["count"]), 2)

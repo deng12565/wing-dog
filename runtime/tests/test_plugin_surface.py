@@ -154,6 +154,7 @@ class PluginSurfaceTests(unittest.TestCase):
             set(context.hooks),
             {
                 "pre_gateway_dispatch",
+                "post_gateway_session",
                 "post_llm_call",
                 "post_api_request",
                 "post_tool_call",
@@ -177,7 +178,7 @@ class PluginSurfaceTests(unittest.TestCase):
         self.assertEqual(properties["limit"]["maximum"], 5)
         self.assertEqual(properties["limit"]["default"], 5)
         manifest = (RUNTIME / "goutoujunshi" / "plugin.yaml").read_text(encoding="utf-8")
-        self.assertIn("version: 1.7.0", manifest)
+        self.assertIn("version: 1.8.0", manifest)
         self.assertIn("  - relationship_web_search", manifest)
 
     def test_hermes_web_search_pins_ddgs_registry_provider(self) -> None:
@@ -681,7 +682,13 @@ class PluginSurfaceTests(unittest.TestCase):
             result = goutoujunshi.pre_gateway_dispatch(
                 event=event, gateway=gateway, session_store=session_store
             )
+            session_result = goutoujunshi.post_gateway_session(
+                event=event,
+                gateway=gateway,
+                session_entry=SimpleNamespace(session_id="session-1"),
+            )
         self.assertEqual(result["action"], "allow")
+        self.assertEqual(session_result["action"], "allow")
         self.assertIn("用户在做一个软件项目", event.channel_prompt)
         self.assertIn("当前群尚未绑定具体人物", event.channel_prompt)
         self.assertEqual(event.auto_skill, "goutoujunshi")
@@ -738,18 +745,20 @@ class PluginSurfaceTests(unittest.TestCase):
             goutoujunshi.repository, "recent_context", return_value={"profile": {"id": 7}}
         ), patch.object(
             goutoujunshi.repository, "list_user_memory", return_value=[]
-        ), patch.object(
-            goutoujunshi.repository,
-            "apply_next_message_draft_rule",
-            return_value={"action": "none", "changed": False},
         ):
             result = goutoujunshi.pre_gateway_dispatch(
                 event=event,
                 gateway=SimpleNamespace(adapters={}),
                 session_store=session_store,
             )
+            session_result = goutoujunshi.post_gateway_session(
+                event=event,
+                gateway=SimpleNamespace(adapters={}),
+                session_entry=SimpleNamespace(session_id="session-1"),
+            )
 
         self.assertEqual(result["action"], "allow")
+        self.assertEqual(session_result["action"], "allow")
         self.assertEqual(event.auto_skill, "goutoujunshi")
         self.assertIn("当前权威上下文", event.channel_prompt)
 
@@ -777,10 +786,6 @@ class PluginSurfaceTests(unittest.TestCase):
             goutoujunshi.repository, "recent_context", return_value=context
         ) as recent, patch.object(
             goutoujunshi.repository, "list_user_memory", return_value=[]
-        ), patch.object(
-            goutoujunshi.repository,
-            "apply_next_message_draft_rule",
-            return_value={"action": "none", "changed": False},
         ):
             for message_id, media in (("message-1", []), ("message-2", ["shot.png"])):
                 event = SimpleNamespace(
@@ -795,7 +800,13 @@ class PluginSurfaceTests(unittest.TestCase):
                     gateway=SimpleNamespace(adapters={}),
                     session_store=session_store,
                 )
+                session_result = goutoujunshi.post_gateway_session(
+                    event=event,
+                    gateway=SimpleNamespace(adapters={}),
+                    session_entry=SimpleNamespace(session_id="stable-session"),
+                )
                 self.assertEqual(result["action"], "allow")
+                self.assertEqual(session_result["action"], "allow")
                 prompts.append(event.channel_prompt)
         self.assertEqual(prompts[0], prompts[1])
         recent.assert_called_once()
@@ -821,7 +832,7 @@ class PluginSurfaceTests(unittest.TestCase):
             goutoujunshi.repository, "recent_context", return_value={}
         ), patch.object(goutoujunshi.repository, "list_user_memory", return_value=[]), patch.object(
             goutoujunshi.repository,
-            "apply_next_message_draft_rule",
+            "resolve_latest_draft_explicit_status",
             return_value={"action": "corrected_not_sent", "changed": True},
         ) as draft_rule:
             result = goutoujunshi.pre_gateway_dispatch(
@@ -829,7 +840,7 @@ class PluginSurfaceTests(unittest.TestCase):
             )
         self.assertEqual(result["action"], "allow")
         self.assertEqual(draft_rule.call_args.kwargs["channel"], "抖音")
-        self.assertTrue(draft_rule.call_args.kwargs["denies_sending"])
+        self.assertEqual(draft_rule.call_args.kwargs["resolution"], "not-sent")
 
     def test_session_commands_do_not_confirm_drafts(self) -> None:
         binding = {"id": 7, "chat_id": "chat-1", "owner_key": "owner-1", "current_channel": "微信"}
@@ -844,7 +855,7 @@ class PluginSurfaceTests(unittest.TestCase):
         ), patch.object(goutoujunshi.repository, "get_binding", return_value=binding), patch.object(
             goutoujunshi.repository, "recent_context", return_value={}
         ), patch.object(goutoujunshi.repository, "list_user_memory", return_value=[]), patch.object(
-            goutoujunshi.repository, "apply_next_message_draft_rule"
+            goutoujunshi.repository, "resolve_latest_draft_explicit_status"
         ) as draft_rule:
             event = SimpleNamespace(
                 text="/new", source=source, media_urls=[], message_id="message-1", channel_prompt=""
@@ -857,8 +868,11 @@ class PluginSurfaceTests(unittest.TestCase):
 
     def test_not_sent_detection_does_not_match_common_unrelated_words(self) -> None:
         self.assertIsNone(goutoujunshi.DRAFT_NOT_SENT.search("我今天没发烧，也没发现异常"))
+        self.assertIsNone(goutoujunshi.DRAFT_NOT_SENT.search("这个功能改了不少，重新总结一下"))
         self.assertIsNotNone(goutoujunshi.DRAFT_NOT_SENT.search("上一句我还没发"))
         self.assertIsNotNone(goutoujunshi.DRAFT_NOT_SENT.search("回复我改了版本"))
+        self.assertIsNotNone(goutoujunshi.DRAFT_NOT_SENT.search("上一条没采用"))
+        self.assertIsNotNone(goutoujunshi.DRAFT_NOT_SENT.search("上一条改了"))
 
     def test_commit_turn_uses_server_source_and_invalidates_only_other_sessions(self) -> None:
         binding = {

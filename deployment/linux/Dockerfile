@@ -12,7 +12,7 @@ RUN set -eu; \
         --no-deps --require-hashes \
         -r /tmp/wing-dog-wheelhouse/requirements-linux.lock; \
     /opt/hermes/.venv/bin/python /tmp/wing-dog-bootstrap.py \
-        install-hermes-vision-patch \
+        install-hermes-runtime-patch \
         --agent-root /opt/hermes \
         --backup-dir /opt/hermes/.wing-dog-patches; \
     /opt/hermes/.venv/bin/python -c \
@@ -20,4 +20,4 @@ RUN set -eu; \
     rm -rf /tmp/wing-dog-bootstrap.py /tmp/wing-dog-wheelhouse
 
 LABEL org.opencontainers.image.title="Wing-Dog Hermes Runtime" \
-      org.opencontainers.image.description="Pinned Hermes runtime with Wing-Dog dependencies and bounded vision patch"
+      org.opencontainers.image.description="Pinned Hermes runtime with Wing-Dog dependencies and atomic runtime patch"

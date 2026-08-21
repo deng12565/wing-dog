@@ -814,6 +814,13 @@ def recent_context(
             SELECT e.id,e.event_type,e.author_role,e.content,e.evidence_kind,e.occurred_at,c.kind AS channel
             FROM relationship_events e JOIN source_channels c ON c.id=e.source_channel_id
             WHERE e.relationship_id=%s AND c.kind=%s AND e.event_type IN ('received','sent')
+              AND NOT (
+                  e.event_type='sent' AND EXISTS (
+                      SELECT 1 FROM relationship_events invalidation
+                      WHERE invalidation.supersedes_event_id=e.id
+                        AND invalidation.event_type='correction'
+                  )
+              )
             ORDER BY e.occurred_at DESC,e.id DESC LIMIT %s
             """,
             (relationship_id, current_channel, min(max(limit, 1), 12)),
@@ -1116,13 +1123,92 @@ def resolve_draft(draft_id: int, *, resolution: str, source_ref: str) -> dict[st
     return {"draft_id": int(draft_id), "resolution": resolution, "event_id": event_id, "changed": created}
 
 
-def apply_next_message_draft_rule(
+def correct_inferred_sent_events(
+    relationship_id: int,
+    event_ids: list[int],
+    *,
+    source_ref: str,
+) -> dict[str, Any]:
+    unique_ids = list(dict.fromkeys(int(value) for value in event_ids))
+    if not unique_ids or any(value <= 0 for value in unique_ids):
+        raise ValueError("at least one positive sent event id is required")
+    if len(unique_ids) > 100:
+        raise ValueError("at most 100 inferred sent events can be corrected at once")
+    source_ref = str(source_ref or "").strip()
+    if not source_ref or len(source_ref) > 64 or not re.fullmatch(
+        r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}", source_ref
+    ):
+        raise ValueError("invalid correction source_ref")
+    placeholders = ",".join(["%s"] * len(unique_ids))
+    created_ids: list[int] = []
+    correction_ids: list[int] = []
+    with transaction() as cursor:
+        cursor.execute(
+            f"""
+            SELECT e.id,e.relationship_id,e.event_type,e.evidence_kind,c.kind AS channel
+            FROM relationship_events e
+            JOIN source_channels c ON c.id=e.source_channel_id
+            WHERE e.id IN ({placeholders})
+            ORDER BY e.id
+            FOR UPDATE
+            """,
+            tuple(unique_ids),
+        )
+        rows = cursor.fetchall()
+        found = {int(row["id"]): row for row in rows}
+        if set(found) != set(unique_ids):
+            missing = sorted(set(unique_ids) - set(found))
+            raise LookupError(f"inferred sent events not found: {missing}")
+        for event_id in unique_ids:
+            row = found[event_id]
+            if int(row["relationship_id"]) != int(relationship_id):
+                raise ValueError(f"event {event_id} belongs to another relationship")
+            if str(row["event_type"]) != "sent":
+                raise ValueError(f"event {event_id} is not sent")
+            if str(row["evidence_kind"]) != "inferred_from_next_owner_message_same_channel":
+                raise ValueError(f"event {event_id} is not an inferred sent event")
+        for event_id in unique_ids:
+            row = found[event_id]
+            correction_id, created = append_event_with_status(
+                cursor,
+                relationship_id=int(relationship_id),
+                event_type="correction",
+                author_role="system",
+                content="迁移审计确认：该 sent 由普通后续消息自动推断，推断无效；实际发送状态未知。",
+                channel=str(row["channel"]),
+                evidence_kind="migration_invalid_inferred_sent",
+                external_message_id=f"correction:{source_ref}:sent:{event_id}",
+                supersedes_event_id=event_id,
+                metadata={
+                    "source_ref": source_ref,
+                    "invalidated_evidence_kind": "inferred_from_next_owner_message_same_channel",
+                    "actual_sent_status": "unknown",
+                },
+            )
+            correction_ids.append(correction_id)
+            if created:
+                created_ids.append(correction_id)
+        if created_ids:
+            queue_export(cursor, int(relationship_id))
+    return {
+        "relationship_id": int(relationship_id),
+        "target_event_ids": unique_ids,
+        "correction_event_ids": correction_ids,
+        "created": len(created_ids),
+    }
+
+
+def resolve_latest_draft_explicit_status(
     binding: dict[str, Any],
     *,
     channel: str,
     source_ref: str,
-    denies_sending: bool,
+    resolution: str,
 ) -> dict[str, Any]:
+    if resolution not in {"sent", "not-sent"}:
+        raise ValueError("draft resolution must be sent or not-sent")
+    if not source_ref:
+        raise ValueError("draft resolution source is unavailable")
     with transaction() as cursor:
         cursor.execute(
             """
@@ -1144,18 +1230,18 @@ def apply_next_message_draft_rule(
         draft = cursor.fetchone()
         if not draft:
             return {"action": "none", "draft_id": None, "changed": False}
-        if denies_sending:
+        if resolution == "not-sent":
             event_id, created = append_event_with_status(
                 cursor,
                 relationship_id=int(binding["id"]),
                 event_type="correction",
                 author_role="user",
-                content="用户明确否定上一草稿按原文发送；可能未发送、未采用或已修改。",
+                content="用户明确确认上一草稿未发送，或实际采用了不同版本。",
                 channel=channel,
-                evidence_kind="explicit_user_correction",
+                evidence_kind="explicit_user_draft_status",
                 external_message_id=f"{source_ref}:draft:not-sent",
                 supersedes_event_id=int(draft["id"]),
-                metadata={"confirmation_rule": "next_owner_message_same_channel", "source_text_stored": False},
+                metadata={"confirmation_rule": "explicit_owner_status", "source_text_stored": False},
             )
             if created:
                 queue_export(cursor, int(binding["id"]))
@@ -1167,14 +1253,33 @@ def apply_next_message_draft_rule(
             author_role="user",
             content=str(draft["content"]),
             channel=channel,
-            evidence_kind="inferred_from_next_owner_message_same_channel",
+            evidence_kind="explicit_user_draft_status",
             external_message_id=f"{source_ref}:draft:sent",
             supersedes_event_id=int(draft["id"]),
-            metadata={"confirmation_rule": "next_owner_message_same_channel"},
+            metadata={"confirmation_rule": "explicit_owner_status"},
         )
         if created:
             queue_export(cursor, int(binding["id"]))
         return {"action": "confirmed_sent", "draft_id": int(draft["id"]), "event_id": event_id, "changed": created}
+
+
+def apply_next_message_draft_rule(
+    binding: dict[str, Any],
+    *,
+    channel: str,
+    source_ref: str,
+    resolution: str | None = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """Compatibility wrapper that never infers state from an ordinary message."""
+    if resolution is None:
+        return {"action": "none", "draft_id": None, "changed": False}
+    return resolve_latest_draft_explicit_status(
+        binding,
+        channel=channel,
+        source_ref=source_ref,
+        resolution=resolution,
+    )
 
 
 def events_to_json(events: list[dict[str, Any]]) -> list[dict[str, Any]]:

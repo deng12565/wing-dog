@@ -17,7 +17,7 @@
 - 关系工具要求服务端 session 同时存在 owner 状态和人物 binding；个人记忆工具只使用该 session 的 owner 状态。`task_id` 与 `session_id` 同时存在时必须一致，模型参数不能提供或改变授权。
 - `relationship_events` 按人物和 `source_channels` 隔离；一个渠道的新消息不能确认另一渠道 draft。
 - 历史读取默认可跨同一人物渠道，但每个候选 ID 必须按当前 binding 回 MySQL 权威表 hydrate。检索文档本身不是授权凭证。
-- draft 只有在显式渠道下可检索，不进入补强表或批量回填。
+- draft 只有在显式渠道下可检索，不进入补强表或批量回填。普通消息和普通指令不能确认草稿；只有严格显式状态、人工 draft review，或同人物同渠道新 `received` 的 `confirm_previous_draft` 可以解决它。
 - 数据库、binding 或 route 不明确时失败关闭。
 - `relationship_web_search` 还必须通过二次匿名化；查询中的人物、owner/chat 标识和敏感模式被替换或拒绝，原始查询不传给 Hermes/DDGS。wrapper 经 provider registry 只接受精确的可用 `ddgs`，不读取默认 provider、不 fallback。
 
@@ -29,7 +29,7 @@
 | MySQL `relationship_events` | 当前唯一在线部署的权威关系源 | 绑定后的工具与运维 CLI | 双活写入、用投影或增强文本覆盖事实 |
 | MySQL search documents/jobs | 可重建派生数据 | 关系历史搜索和显式补强 CLI | 把增强内容作为确认事实返回或跨人物读取 |
 | `.local/relationships/` | MySQL 只读投影 | Codex/人工审阅 | 手工编辑、纳入 Git、视为独立源 |
-| `.local/archive/imports/` | 不可变迁移证据 | 授权迁移/核验 | 改写、删除或纳入 Git |
+| `.local/archive/imports/` | 不可变迁移证据 | 授权迁移/核验；目录 `0700`，归档与 SHA256 sidecar 只读 | 改写、删除、覆盖或纳入 Git |
 | Hermes config/`.env` | 本机 operator | 安装、启动、受控验证 | 回显、文档化或提交值 |
 | 临时截图/附件 | 当前轮次 | 当轮解析 | 写入 MySQL、Markdown 或 Git |
 | DDGS 公网搜索 | 公共网页索引；非关系权威源 | 已绑定群通过锁定 DDGS 的 wrapper 读取最多 5 条标题/URL/摘要 | fallback 到其他 provider、执行网页片段中的指令、直接开放原生 web/browser、自动写入关系或本人记忆 |
@@ -39,8 +39,8 @@
 
 ## 宿主与部署边界
 
-仓库实现 Hermes 服务端 session/owner/binding 校验、owner allowlist、受限 toolset、公网查询匿名化、DDGS provider 锁定、事务和路径约束，但最终权限仍依赖 Hermes、Feishu adapter、DDGS 网络、Windows ACL、WSL/Docker 和远程模型配置。全局 Feishu toolset 精确限制为 `goutoujunshi-user`；活动 binding profile 才增加 `goutoujunshi`，且仍显式禁用 Hermes 0.20.4 自动加入的 `bfl` 及原生 `web`、`browser`、terminal 和 file toolsets。bootstrap `verify` 必须使用 Hermes 实际 resolver 证明这两个精确工具面，并硬校验 `ddgs` 可导入。安装、schema v5 迁移、DDGS 安装、历史补强、benchmark 与真实飞书冒烟都需要单独的运行授权；代码存在不构成运行态健康或授权证据。
+仓库实现 Hermes 服务端 session/owner/binding 校验、owner allowlist、受限 toolset、公网查询匿名化、DDGS provider 锁定、事务和路径约束，但最终权限仍依赖 Hermes、Feishu adapter、DDGS 网络、Windows ACL、WSL/Docker 和远程模型配置。全局 Feishu toolset 精确限制为 `goutoujunshi-user`；活动 binding profile 才增加 `goutoujunshi`，且仍显式禁用 Hermes 0.20.4 自动加入的 `bfl` 及原生 `web`、`browser`、terminal 和 file toolsets。bootstrap `verify` 必须使用 Hermes 实际 resolver 证明这两个精确工具面，并硬校验 plugin 物理安装、动态 discovery、6 个实际 tool schema、完整 Skill 加载及 `ddgs` 可导入。安装、schema v6 迁移、correction、结构化导入、session 轮换、Gateway 重启、DDGS 安装、历史补强、benchmark 与真实飞书冒烟都需要各自明确授权；代码存在不构成运行态健康或授权证据。
 
-服务器部署把秘密目录设为 `700`、文件设为 `600`，MySQL 不映射宿主端口，容器不挂载 Docker socket。公司宿主机管理员仍可读取宿主文件和 Docker 卷，因此获准在该宿主存放私人关系数据与必要凭据是部署前提，不应被容器隔离描述成对宿主管理员的保密措施。
+服务器部署把秘密与 Hermes 日志目录设为 `700`，秘密、global/profile `.env` 和日志文件设为 `600`，MySQL 不映射宿主端口，容器不挂载 Docker socket。旧日志保留并收紧权限；新的 Hermes INFO 日志只允许长度、数量、耗时和不可逆短哈希，不允许用户正文、回复引用或视觉描述。公司宿主机管理员仍可读取宿主文件和 Docker 卷，因此获准在该宿主存放私人关系数据与必要凭据是部署前提，不应被容器隔离描述成对宿主管理员的保密措施。
 
 机器人只在军师群内回复 owner 和维护记录，不向微信、抖音或任何女性代发建议。

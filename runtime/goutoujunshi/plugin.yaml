@@ -1,5 +1,5 @@
 name: goutoujunshi
-version: 1.7.0
+version: 1.8.0
 description: "Fail-closed Feishu adviser with isolated MySQL relationship memory and privacy-bounded web search."
 author: local
 kind: standalone
@@ -15,5 +15,6 @@ provides_tools:
   - user_memory_forget
 hooks:
   - pre_gateway_dispatch
+  - post_gateway_session
   - post_llm_call
   - on_session_end

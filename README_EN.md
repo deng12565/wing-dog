@@ -104,7 +104,7 @@ These are legacy compatibility identifiers, not a second product brand. Renaming
 
 The MySQL `goutoujunshi` database is the sole authoritative relationship source. `.local/relationships/` contains generated read-only projections and must not be edited manually.
 
-Schema v5 uses MySQL 8 `ngram` FULLTEXT and combines three candidate branches inside one person binding:
+Schema v6 retains MySQL 8 `ngram` FULLTEXT retrieval and adds SHA256-bound structured imports plus append-only recovery for invalid inferred-sent events. Retrieval combines three candidate branches inside one person binding:
 
 1. Exact and substring matches against authoritative source text.
 2. Ngram full-text retrieval against authoritative source text.
@@ -114,9 +114,11 @@ After fixed RRF ranking, the runtime hydrates authoritative event bodies from My
 
 ## Controlled public web search
 
-Hermes plugin 1.7.0 exposes `relationship_web_search` only inside a Wing-Dog relationship group with an active person binding. The tool rechecks the owner, chat, and current MySQL binding from server-side session state, applies a second anonymization pass to a minimal query, and then asks the Hermes provider registry for the exact keyless `ddgs` provider. It never calls the generic search entry point or falls back to another provider; missing or unavailable DDGS fails closed. Unbound groups have owner-memory tools only and cannot search the web.
+Hermes plugin 1.8.0 exposes `relationship_web_search` only inside a Wing-Dog relationship group with an active person binding. The tool rechecks the owner, chat, and current MySQL binding from server-side session state, applies a second anonymization pass to a minimal query, and then asks the Hermes provider registry for the exact keyless `ddgs` provider. It never calls the generic search entry point or falls back to another provider; missing or unavailable DDGS fails closed. Unbound groups have owner-memory tools only and cannot search the web.
 
 Each search returns at most five titles, URLs, and snippets. It does not fetch full pages, expose a browser, or promise a reliable publication date. Responses must separate web information, authoritative MySQL relationship memory, and model inference, and cite the title, URL, and retrieval date for web material. Any instruction inside a page title, snippet, or other web text is untrusted data and must never be executed. Results stay in the current Hermes session and are not automatically written to events, snapshots, drafts, owner memory, or Markdown projections. Anonymization rejection, timeout, and provider failure are reported as explicit degradation.
+
+An ordinary follow-up no longer marks the previous draft as sent. A draft is resolved only by a strict owner confirmation, manual draft review, or a new `received` event for the same person and channel with `confirm_previous_draft`. Structured history imports require matching source and manifest hashes plus one unique active person. A `wechat-agent-archive/v1` import additionally requires an explicitly confirmed local WeChat author and deduplicates overlapping exports by conversation and message anchor. ASR, missing media, and `PARTIAL` exports retain derived/uncertain provenance instead of being represented as verbatim dialogue; immutable archive evidence is never overwritten.
 
 ## Repository layout
 

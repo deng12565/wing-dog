@@ -86,8 +86,30 @@ def transaction() -> Iterator[Any]:
 def apply_schema() -> None:
     sql = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
     statements = [item.strip() for item in sql.split(";") if item.strip()]
+    deferred_v6 = [statement for statement in statements if "VALUES (6," in statement]
     with transaction() as cursor:
         for statement in statements:
+            if statement in deferred_v6:
+                continue
+            cursor.execute(statement)
+        cursor.execute(
+            """
+            SELECT COLUMN_NAME
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='import_manifests'
+              AND COLUMN_NAME IN ('manifest_sha256','manifest_content')
+            """
+        )
+        existing = {str(row["COLUMN_NAME"]) for row in cursor.fetchall()}
+        if "manifest_sha256" not in existing:
+            cursor.execute(
+                "ALTER TABLE import_manifests ADD COLUMN manifest_sha256 CHAR(64) NULL AFTER raw_content"
+            )
+        if "manifest_content" not in existing:
+            cursor.execute(
+                "ALTER TABLE import_manifests ADD COLUMN manifest_content JSON NULL AFTER manifest_sha256"
+            )
+        for statement in deferred_v6:
             cursor.execute(statement)
 
 
@@ -164,7 +186,7 @@ def migration_fingerprint() -> dict[str, Any]:
         conn.close()
     return {
         "ok": True,
-        "schema_version": 5,
+        "schema_version": 6,
         "tables": table_results,
         "sha256": overall.hexdigest(),
     }

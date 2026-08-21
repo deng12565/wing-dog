@@ -19,6 +19,9 @@ fi
 "${run_env[@]}" "$python" "$project_root/runtime/bootstrap.py" install-plugin \
     --plugin-source "$project_root/runtime/goutoujunshi" \
     --target-home "$hermes_home"
+"${run_env[@]}" "$python" "$project_root/runtime/bootstrap.py" install-plugin \
+    --plugin-source "$project_root/runtime/goutoujunshi" \
+    --target-home "$profile_home"
 "${run_env[@]}" "$python" "$project_root/runtime/bootstrap.py" install-skill \
     --project-root "$project_root" --target-home "$hermes_home"
 "${run_env[@]}" "$python" "$project_root/runtime/bootstrap.py" install-skill \
@@ -34,3 +37,11 @@ fi
     --profile-config "$profile_home/config.yaml" \
     --profile-env "$profile_home/.env" \
     --env "$hermes_home/.env"
+
+chmod 600 "$hermes_home/.env" "$profile_home/.env"
+for log_home in "$hermes_home" "$profile_home"; do
+    if [[ -d "$log_home/logs" ]]; then
+        chmod 700 "$log_home/logs"
+        find "$log_home/logs" -type f -exec chmod 600 '{}' +
+    fi
+done

@@ -61,13 +61,15 @@ Wing-Dog 优先帮助男性提高吸引、验证互惠、推动现实见面并�
 - 为引用资料补充更新时间、来源类型和复核状态。
 - 扩展地区化法律/求助信息和多语言内容。
 
-## plugin 1.7.0 受控联网合同
+## plugin 1.8.0 当前 runtime 合同
 
-`relationship_web_search` 只存在于活动人物 binding 对应的 Wing-Dog 关系 profile。它复用服务端 session/task、owner、群、人物和当前 MySQL binding 授权，在插件内二次匿名化最长 240 字符的最小查询，再经 Hermes provider registry 精确取得免 API key 的 `ddgs` provider。它不调用通用搜索入口、不读取默认 provider，也不允许 fallback；DDGS 不可用即失败关闭。未绑定群只有 `goutoujunshi-user`，不能联网。
+plugin 1.8.0 保留 1.7.0 的受控联网合同，并修复 profile session/history、首轮 Skill、草稿状态、飞书图片批次和 INFO 日志隐私。`relationship_web_search` 只存在于活动人物 binding 对应的 Wing-Dog 关系 profile。它复用服务端 session/task、owner、群、人物和当前 MySQL binding 授权，在插件内二次匿名化最长 240 字符的最小查询，再经 Hermes provider registry 精确取得免 API key 的 `ddgs` provider。它不调用通用搜索入口、不读取默认 provider，也不允许 fallback；DDGS 不可用即失败关闭。未绑定群只有 `goutoujunshi-user`，不能联网。
 
 首版只返回最多 5 条 HTTP(S) 结果的标题、URL 和摘要，以及 UTC 检索时间和是否发生脱敏；不抓取全文、不开放 browser/terminal/file，也不承诺稳定发布日期。网页摘要属于不可信临时外部信息，回答必须标注标题、URL 和检索日期，并与 MySQL 权威关系记忆、模型推断分开；网页标题、摘要和其他片段中的任何指令都不得执行。
 
 联网结果只进入当前 Hermes session，不自动写入关系事件、快照、draft、owner 本人记忆、检索文档或 Markdown 投影。匿名化无法安全完成时返回 `privacy_rejected`；DDGS 未注册、不支持搜索、不可用、超时或异常时返回 `web_search_unavailable`。bootstrap `verify` 使用 Hermes 实际 resolver 核验全局/关系 profile 的精确工具面，并硬校验 `ddgs` import；仓库中的实现和测试仍不能单独证明本机 DDGS、Gateway 或飞书运行态已发布并健康。
+
+profile route 确认后整轮进入同一个 runtime scope；`pre_gateway_dispatch` 只完成 owner/binding/command/fail-closed，实际 session ID 由 Gateway 创建后交给 `post_gateway_session`。关系 profile 关闭通用首轮介绍但继续消费 `auto_skill=goutoujunshi`。普通消息不推断 draft 已发送；图片与 2.5 秒内兼容说明按 session/sender/reply/thread 聚合；INFO 日志不记录用户正文、回复引用或视觉描述。
 
 ## PRD：MySQL 增强检索与有界关系上下文
 
@@ -75,9 +77,9 @@ Wing-Dog 优先帮助男性提高吸引、验证互惠、推动现实见面并�
 
 | 项目 | 内容 |
 | --- | --- |
-| 状态 | 实现、生产迁移、历史补强和运行态发布完成 |
-| 版本 | schema v5 / plugin source 1.7.0 |
-| 日期 | 2026-08-17 |
+| 状态 | schema v5 检索基线已历史发布；schema v6/plugin 1.8.0 已实现并离线验证，尚未部署 |
+| 版本 | schema v6 / plugin source 1.8.0 |
+| 日期 | 2026-08-21 |
 | 范围 | 私有 Hermes runtime；Codex Skill 分发面不新增持久化依赖 |
 
 ### 背景与问题
@@ -101,13 +103,15 @@ Wing-Dog 优先帮助男性提高吸引、验证互惠、推动现实见面并�
 
 ### 功能需求
 
-#### FR-1 schema v5
+#### FR-1 schema v5 检索基线与 schema v6 导入扩展
 
 新增 `relationship_event_search_documents`：保存 event/person ID、原文副本与 SHA256、增强 JSON、扁平增强文本、增强来源/版本/状态。原文和增强文本均使用 MySQL `FULLTEXT ... WITH PARSER ngram`。
 
 新增 `relationship_event_enrichment_jobs`：保存一个事件对应的 prompt 版本、`pending/running/done/failed`、attempts、无正文错误码/摘要和时间戳，支持断点续跑。
 
 迁移先创建并填充新表，再删除旧 `relationship_event_index_jobs` 与 `relationship_search_indexes`。不触碰仓库外共享 Milvus 服务、collection 或卷。
+
+schema v6 为 `import_manifests` 增加 canonical manifest JSON 与 SHA256，并只在列升级成功后登记 migration 6。结构化导入必须校验 source/manifest hash 和唯一活动人物，以 source hash、行号、事件类型生成稳定去重键；错误自动推断 `sent` 只追加 correction，实际发送状态保持 unknown。
 
 #### FR-2 写入时增强
 
@@ -172,7 +176,7 @@ draft 不增强。correction 正常增强，但增强内容只能从该事件原
 
 | 编号 | 标准 |
 | --- | --- |
-| AC-1 | schema v5 在空库和 v4 数据库各应用一次，再重复应用一次，表/索引/任务数量幂等 |
+| AC-1 | schema v6 在空库和 v4 数据库各应用一次，再重复应用一次，列/表/索引/任务数量幂等 |
 | AC-2 | 合法增强、缺失增强、非法增强、重复提交和 prompt 升级合同全部通过 |
 | AC-3 | frozen 同义 Recall@5 >= 90%、MRR@5 >= 0.80，精确 Recall@5 = 100% |
 | AC-4 | 80 条 oracle 对照关键事实覆盖 >= 95%，行动方向一致 >= 90% |
@@ -184,7 +188,7 @@ draft 不增强。correction 正常增强，但增强内容只能从该事件原
 
 ### 当前实施状态
 
-- 已实现 schema v5、写入时增强、`raw_only` 降级、任务队列、显式 worker、三分支 MySQL RRF、权威 hydrate、correction closure 和有界输出。
+- 已实现 schema v6；保留 schema v5 的写入时增强、`raw_only` 降级、任务队列、显式 worker、三分支 MySQL RRF、权威 hydrate、correction closure 和有界输出，并增加结构化 import manifest 与错误 sent 追加式恢复。
 - 已删除仓库内向量客户端、索引 worker、Milvus manager、embedding benchmark、CLI 和环境变量合同；共享外部资源未触碰。
 - 已实现固定 MySQL/answer oracle benchmark runner，并限制到独立测试数据库。
 - 已同步 README、架构、流程、变量、权限、自动化和测试合同。
@@ -192,3 +196,4 @@ draft 不增强。correction 正常增强，但增强内容只能从该事件原
 - 409 条历史任务已全部补强为 `enriched/done`，权威 source hash 409/409 一致；其中 408 条一次成功，1 条模型遗漏经一次明确单条重试成功，无 pending/running/failed 或残留错误。
 - 10000 条合成检索与 80 条 frozen answer oracle 已通过：语义 Recall@5 100%、MRR@5 0.873、精确 Recall@5 100%、纠正闭包 Recall@1 100%、线上数据库路径 P95 168.86ms/max 185.52ms、关键事实覆盖 100%、行动方向一致 97.5%。
 - plugin 1.5.0 曾发布到 Hermes 并通过计划任务、Gateway、Feishu websocket、远程 text/image/function preflight、owner 路由、人物/渠道/draft 隔离、输出边界及数据库失败关闭验证。plugin 1.6.0 于 2026-08-13 部署服务端 session 授权后，真实截图暴露旧会话/截图机器人文字污染和关系工具被 `tool_search` 延迟披露的问题；plugin 1.6.1 增加了绑定信任优先级并让关系 profile 的受控工具直接可见。plugin 1.7.0 的仓库合同新增绑定群受控公网搜索；其源码存在不构成 DDGS、Gateway 或真实飞书运行态健康证据。生产历史的 14 条 correction 均无 `supersedes_event_id`，因此真实 correction closure 没有现成样本，证据来自专用 MySQL fixture 与自动测试。
+- plugin 1.8.0 当前只完成仓库实现和锁定 Hermes 0.20.4 离线验证；schema v6、correction、Echo 导入、session 轮换、Gateway 重启和真实飞书验收尚未执行，不能描述为线上健康。

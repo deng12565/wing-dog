@@ -13,7 +13,8 @@
 
 ## Hermes Hooks 与工具
 
-- `pre_gateway_dispatch`：处理命令，校验 owner/人物/route；按同人物同渠道规则解析上一 draft；每轮设置 `auto_skill=goutoujunshi`，并注入个人记忆和关系上下文。完整 Skill 由 Gateway 只在新 session 的 auto-skill 阶段装入首条 user 消息。
+- `pre_gateway_dispatch`：处理命令，校验 owner/人物/route；只处理严格显式的上一 draft 状态，并设置 `auto_skill=goutoujunshi`。普通消息和“查询一下、重新生成、是一个人、总结一下”等一般指令不改变草稿状态。
+- `post_gateway_session`：Gateway 在已选择的 profile runtime scope 中创建/读取 session 后，把实际 session ID 交给插件；插件再绑定 owner/人物/群、注入个人记忆和关系上下文。完整 Skill 只在新 session 的 auto-skill 阶段装入首条 user 消息，关系 profile 关闭通用首轮介绍。
 - `post_llm_call` 与 session cleanup hooks：清除临时媒体和本轮状态，写入无正文本地指标。
 - `relationship_commit_turn`：一个事务追加事件、写入时增强、精确 draft 和快照补丁。
 - `relationship_search_events`：在当前人物内执行 MySQL 三分支检索，返回有界权威正文。
@@ -23,6 +24,8 @@
 全局 Feishu toolset 精确为 `goutoujunshi-user`，未绑定群只有 owner 本人记忆工具。活动 binding 路由到 `goutoujunshi` profile 后，才增加关系工具和 `relationship_web_search`。原生 `web_search`、`web_extract`、browser、terminal、file、delegation、memory、cron、mcp 和 computer 均不直接暴露；wrapper 只把净化后的查询交给 registry 中名称精确为 `ddgs` 的可用 provider，不读取默认 provider，也不允许 fallback。
 
 `goutoujunshi` profile 设置 `tools.tool_search: false`，使该 profile 的 6 个受控插件工具直接可见，避免聊天截图轮因延迟披露而跳过搜索与提交。profile 同时设置 `web.search_backend: ddgs` 和 `WEB_TOOLS_DEBUG=false`；DDGS 通过 Hermes 官方 `tools post-setup ddgs` 安装，不需要 API key。bootstrap `verify` 使用 Hermes 实际 toolset resolver 核验全局和关系 profile 的精确解析结果，并硬校验 `ddgs` import；YAML 表面值正确但解析泄漏或依赖不可导入仍判失败。
+
+锁定 Hermes 0.20.4 的四文件 runtime patch 让 profile route 确认后的 hook、session、history、agent、persist 与 cache 回基线处于同一 scope，并让 Feishu adapter 以 session/sender/reply/thread 为键聚合图片和随后 2.5 秒内的兼容说明。该补丁还把 INFO 日志收敛为长度、数量、耗时和不可逆短哈希；源码版本、逐文件原始 SHA 或补丁后 SHA 任一不匹配都失败并回滚全部文件。
 
 关系 profile 的解析结果不包含 `skills`、file 或 terminal。Gateway 可以在服务端内部读取 auto-skill，但主模型没有 `skill_view` 或文件读取工具，因而不能继续读取 `SKILL.md` 指向的嵌套 references。`bootstrap verify` 当前名为 `skill_view_enabled` 的字段只检查 `skills` 是否未被列入 disabled list；它不能覆盖 platform toolset allowlist，也不能证明模型实际拥有 `skill_view`，应以 resolved toolsets 为准。
 
@@ -48,7 +51,8 @@ Linux 常驻栈由 `deployment/linux/supervisor.py` 在 Gateway 容器内执行�
 - `scripts/wsl/Manage-Goutoujunshi-MySql.sh`
 - `runtime/bootstrap.py` 的 secrets/preflight/configure/install 命令
 - Hermes `tools post-setup ddgs`，会修改受管 Python 环境中的包
-- `runtime/goutoujunshi_cli.py` 的 init/import/export/reconcile/user-memory、draft resolve，以及 enrichment queue/work/retry 命令
+- `runtime/goutoujunshi_cli.py` 的 init/import/import-structured/correct-inferred-sent/export/reconcile/user-memory、draft resolve，以及 enrichment queue/work/retry 命令
+- `runtime/bootstrap.py rotate-profile-sessions`，会结束旧 profile transcript 并移除活动 route
 - `runtime/benchmarks/run_mysql_search_benchmark.py`
 - `deployment/linux/control.sh`、`bootstrap.sh`、`restore.sh` 和 `backup.sh`
 

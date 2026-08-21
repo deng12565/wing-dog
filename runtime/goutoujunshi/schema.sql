@@ -92,6 +92,8 @@ CREATE TABLE IF NOT EXISTS import_manifests (
     source_bytes BIGINT UNSIGNED NOT NULL,
     parser_version VARCHAR(32) NOT NULL,
     raw_content LONGTEXT NOT NULL,
+    manifest_sha256 CHAR(64) NULL,
+    manifest_content JSON NULL,
     imported_event_count INT UNSIGNED NOT NULL,
     imported_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     UNIQUE KEY uq_import_sha (source_sha256),
@@ -234,3 +236,6 @@ VALUES (4, 'reserved legacy relationship search migration');
 
 INSERT IGNORE INTO schema_migrations(version, description)
 VALUES (5, 'replace vector search with enriched MySQL fulltext documents');
+
+INSERT IGNORE INTO schema_migrations(version, description)
+VALUES (6, 'structured imports and append-only inferred-sent recovery');

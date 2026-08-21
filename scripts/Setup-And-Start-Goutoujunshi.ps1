@@ -230,14 +230,16 @@ if ($LASTEXITCODE -ne 0) { throw 'Hermes DDGS provider installation did not prod
 Write-Step 'Deploying the restricted Hermes plugin and profile'
 & $Python $Bootstrap install-plugin --plugin-source (Join-Path $RuntimeRoot 'goutoujunshi') --target-home $HermesHome
 if ($LASTEXITCODE -ne 0) { throw 'Hermes plugin deployment failed' }
-& $Python $Bootstrap install-hermes-vision-patch --agent-root $AgentRoot --backup-dir (Join-Path $ProjectRoot '.local\backups\hermes-patches')
-if ($LASTEXITCODE -ne 0) { throw 'Hermes bounded vision patch failed version or SHA256 verification' }
+& $Python $Bootstrap install-hermes-runtime-patch --agent-root $AgentRoot --backup-dir (Join-Path $ProjectRoot '.local\backups\hermes-patches')
+if ($LASTEXITCODE -ne 0) { throw 'Hermes runtime patch failed version, source SHA256, or patched SHA256 verification' }
 if (-not (Test-Path -LiteralPath $ProfileHome)) {
     Push-Location $AgentRoot
     try { & $Python -m hermes_cli.main profile create goutoujunshi --no-skills --no-alias --description 'Private Feishu relationship adviser backed only by the goutoujunshi MySQL database.' | Out-Null }
     finally { Pop-Location }
     if ($LASTEXITCODE -ne 0) { throw 'Hermes profile creation failed' }
 }
+& $Python $Bootstrap install-plugin --plugin-source (Join-Path $RuntimeRoot 'goutoujunshi') --target-home $ProfileHome
+if ($LASTEXITCODE -ne 0) { throw 'Relationship profile plugin deployment failed' }
 & $Python $Bootstrap install-skill --project-root $ProjectRoot --target-home $HermesHome
 if ($LASTEXITCODE -ne 0) { throw 'Global multiplex Skill deployment failed' }
 & $Python $Bootstrap install-skill --project-root $ProjectRoot --target-home $ProfileHome

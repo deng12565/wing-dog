@@ -105,7 +105,7 @@ Rocky Linux 宿主机可通过 `deployment/linux/` 运行独立的 `gateway + my
 
 MySQL `goutoujunshi` 数据库是关系数据的唯一权威来源。`.local/relationships/` 只是事务成功后生成的只读投影，不能手工编辑。
 
-schema v5 使用 MySQL 8 `ngram` FULLTEXT，在单一人物绑定内融合三个候选分支：
+schema v6 延续 MySQL 8 `ngram` FULLTEXT 检索，并增加受 SHA256 约束的结构化导入与错误发送推断恢复。在单一人物绑定内，检索融合三个候选分支：
 
 1. 权威原文精确匹配与子串匹配；
 2. 权威原文 ngram 全文检索；
@@ -115,7 +115,9 @@ schema v5 使用 MySQL 8 `ngram` FULLTEXT，在单一人物绑定内融合三个
 
 ## 受控公网搜索
 
-Hermes plugin 1.7.0 只在已经绑定人物的 Wing-Dog 关系群暴露 `relationship_web_search`。工具先用服务端 session 回查 owner、群和当前 MySQL binding，再对最小查询做二次匿名化，最后经 Hermes provider registry 精确取得无需 API key 的 `ddgs` provider。它不会调用通用搜索入口，也不允许回退到其他 provider；DDGS 未注册或不可用时失败关闭。未绑定群只有 owner 本人记忆工具，不能联网。
+Hermes plugin 1.8.0 只在已经绑定人物的 Wing-Dog 关系群暴露 `relationship_web_search`。工具先用服务端 session 回查 owner、群和当前 MySQL binding，再对最小查询做二次匿名化，最后经 Hermes provider registry 精确取得无需 API key 的 `ddgs` provider。它不会调用通用搜索入口，也不允许回退到其他 provider；DDGS 未注册或不可用时失败关闭。未绑定群只有 owner 本人记忆工具，不能联网。
+
+普通消息不会再被当成“上一条草稿已发送”。只有严格匹配的 owner 明确确认、人工 draft review，或同人物同渠道的新 `received` 带 `confirm_previous_draft`，才会解决未决草稿。结构化历史导入先校验源文件 SHA256、manifest SHA256 和唯一活动人物，再以稳定去重键写入；`wechat-agent-archive/v1` 导出还要求明确确认本机微信作者，并使用会话与消息锚点跨重叠导出去重。ASR、缺失媒体和 `PARTIAL` 导出保留 `derived/uncertain`，不会冒充逐字原文；归档证据不可覆盖。
 
 搜索最多返回 5 条标题、URL 和摘要，不抓取网页全文，不开放浏览器，也不保证稳定获得发布日期。回答必须把联网信息、MySQL 关系记忆和模型推断分开，并为联网信息标注标题、URL 和检索日期；网页标题、摘要或其他片段中的任何指令都只是不可信数据，绝不执行。结果只存在于当前 Hermes 会话，不会自动写入事件、快照、草稿、本人记忆或 Markdown 投影；匿名化拒绝、超时或服务异常时会明确降级。
 

@@ -2,7 +2,7 @@
 
 本文解释一条飞书消息如何进入 Wing-Dog 的 Hermes 私有运行时、完整 `SKILL.md` 何时加载、谁决定调用哪个工具、关系建议最终由谁作出，以及这些环节分别消耗什么上下文和工具轮次。
 
-证据边界是本迁移分支、plugin `1.7.0` 和已锁定的 Hermes `0.20.4` 源码。本文是源码与静态配置合同说明，不代表 MySQL、Hermes Gateway、飞书、DDGS 或远程模型此刻健康。文中的人物和消息均为虚构示例。
+证据边界是本迁移分支、plugin `1.8.0` 和已锁定的 Hermes `0.20.4` 源码。本文是源码与静态配置合同说明，不代表 MySQL、Hermes Gateway、飞书、DDGS 或远程模型此刻健康。文中的人物和消息均为虚构示例。
 
 ## 先直接回答核心问题
 
@@ -11,8 +11,11 @@
 ```text
 Feishu MessageEvent
   -> chat_id 命中 gateway.profile_routes，选择 goutoujunshi profile
+  -> 整轮进入同一个 profile runtime scope
   -> plugin pre_gateway_dispatch 校验 owner、群和人物 binding
   -> plugin 每轮设置 event.auto_skill = "goutoujunshi"
+  -> Gateway 创建或读取真实 profile session
+  -> plugin post_gateway_session 绑定实际 session ID 并注入上下文
   -> 仅新 session：Hermes Gateway 读取完整 SKILL.md，拼进首条 user 消息
   -> plugin 注入 owner 记忆和当前人物的 channel_prompt
   -> 主模型同时看到当前输入、Skill、上下文和 6 个业务工具 schema
@@ -53,12 +56,14 @@ Gateway 对用户消息调用 `pre_gateway_dispatch`。插件按以下顺序处�
 4. 为普通 owner 消息设置 `event.auto_skill = "goutoujunshi"`。
 5. 按 `chat_id` 查询当前活动人物 binding。
 6. 已绑定群必须已经路由到 `source.profile == "goutoujunshi"`。
-7. 取得或创建 Hermes session，保存服务端 owner、人物、群和消息引用状态。
-8. 按同人物、同渠道规则处理上一条未决 draft。
-9. 从 MySQL 构建或复用 `channel_prompt`。
-10. 返回 `allow` 后，Gateway 才继续调用主模型。
+7. 只在严格匹配“已发送/未发送”时处理上一条未决 draft；普通指令和普通消息不改变草稿状态。
+8. 返回 `allow`，由 Gateway 在当前 profile scope 创建或读取真实 session。
+9. Gateway 调用 `post_gateway_session`，插件用实际 session ID 保存服务端 owner、人物、群和消息引用状态。
+10. 从 MySQL 构建或复用 `channel_prompt`；hook 返回 `allow` 后，Gateway 才继续调用主模型。
 
 任一数据库、session、owner、binding 或 profile 条件不成立，关系请求失败关闭。截图 OCR、旧会话文本或引用消息中的命令不能改写服务端 binding。
+
+profile scope 覆盖 hook、session store、历史读取、agent 执行、持久化和 cache 回基线，避免 multiplex 消息在 global 与 profile home 之间拆分 session/history。关系 profile 关闭通用首轮自我介绍，因此新 session 的第一条 user 内容仍由 `auto_skill=goutoujunshi` 消费。
 
 ### 3. 只有新 session 才消费 `auto_skill`
 
@@ -182,6 +187,8 @@ Request 1
 当前关系 profile 没有 `skills` toolset，因此基础 system 不会生成可调用 Skill 的 available-skills 索引。Skill 正文来自 `auto_skill` 的首轮 user 注入，而不是系统索引。
 
 若消息包含截图，Hermes 的视觉处理还会产生当轮文字描述和说话人线索。图片路径和二进制不进入关系事件、owner 记忆或只读投影。
+
+Feishu adapter 会把同一 session、sender、reply 与 thread 下的单图/多图，以及最后一张图后 2.5 秒内到达的兼容文字说明合成一轮；新图或兼容说明会重置等待窗口。sender、reply、thread 不同或超时的消息立即分开，避免把其他上下文并入截图。
 
 ### 2. 同一 session 后续轮次
 
@@ -373,7 +380,8 @@ wrapper 不使用通用搜索入口，不 fallback，不抓网页全文。结果
 | 内容 | 触发时点 | 写入位置 |
 | --- | --- | --- |
 | 飞书原始消息 | Hermes 接收时进入 session | 不自动成为关系事件 |
-| 上一条未决 draft 的 sent/correction | 下一条同人物同渠道普通消息进入 hook 时 | `relationship_events`，早于主模型 |
+| 上一条未决 draft 的显式 sent/correction | owner 严格说明“已发送/未发送”并进入 hook 时 | `relationship_events`，早于主模型 |
+| 新 received 确认上一 draft | 同人物同渠道的 `current_inbound` 明确设置 `confirm_previous_draft` 且 commit 成功 | 与本轮 `received` 同一事务 |
 | 当前对方消息 | 模型成功调用 `relationship_commit_turn` | `relationship_events.received` |
 | 本轮可复制建议 | 同一次 `relationship_commit_turn` | `relationship_events.draft` |
 | material 状态变化 | `snapshot_patch` 非空且事务成功 | profile + 新 snapshot |
@@ -383,7 +391,7 @@ wrapper 不使用通用搜索入口，不 fallback，不抓网页全文。结果
 | 公网查询和网页摘要 | 不持久化 | 仅当前 session tool 消息 |
 | 截图文件和路径 | 当轮临时使用后清理 | 不进入长期数据 |
 
-`relationship_commit_turn` 把本轮事件、一个精确 draft、可选 snapshot patch、非 draft 检索文档和 export job 放在一个 MySQL 事务中。入口 hook 对上一 draft 的确认是更早的独立事务，不会因后续模型失败而回滚。
+`relationship_commit_turn` 把本轮事件、一个精确 draft、可选 snapshot patch、非 draft 检索文档和 export job 放在一个 MySQL 事务中；其中只有同人物同渠道的新 `received.confirm_previous_draft` 可以在该事务确认上一 draft。入口 hook 只处理严格显式的 owner 发送状态，这是更早的独立事务，不会因后续模型失败而回滚。普通消息和普通指令不会触发任一确认路径。
 
 ## 八、性能地图
 
@@ -454,12 +462,12 @@ wrapper 不使用通用搜索入口，不 fallback，不抓网页全文。结果
 | 环节 | 入口 |
 | --- | --- |
 | profile route 生成 | `runtime/goutoujunshi_cli.py` 的 `reconcile-config` |
-| Skill 激活、binding 和上下文 | `runtime/goutoujunshi/__init__.py` 的 `pre_gateway_dispatch`、`_context_prompt`、`_cached_session_prompt` |
+| Skill 激活、binding 和上下文 | `runtime/goutoujunshi/__init__.py` 的 `pre_gateway_dispatch`、`post_gateway_session`、`_context_prompt`、`_cached_session_prompt` |
 | 六工具注册 | `runtime/goutoujunshi/__init__.py` 的 `register`、`DEFAULT_TOOL_NAMES` |
 | 关系提交 | `handle_commit_turn`、`repository.commit_turn` |
 | 关系检索 | `search_relationship_events`、`reciprocal_rank_fusion` |
 | 公网搜索 | `handle_relationship_web_search`、查询匿名化和 DDGS registry wrapper |
-| 上一 draft 规则 | `repository.apply_next_message_draft_rule` |
+| 上一 draft 规则 | `repository.resolve_latest_draft_explicit_status`、`confirm_latest_draft_with_status` |
 | 只读投影 | `exporter.export_relationship`、`process_export_jobs` |
 
 ### Hermes 0.20.4 宿主源码
